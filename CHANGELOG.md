@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-04-18
+
+Release marking the architectural rewrite of the firmware: the 128×64
+OLED variant is retired, the TFT becomes the sole product, the radio
+code is now multi-band (FM / MW / SW) and runs Si4732 polling on a
+dedicated Core 0 task. Long-press menu + NVS persistence land too.
+
+First big step on the road to
+[ATS-Mini](https://github.com/esp32-si4732/ats-mini) feature / UI
+parity. The remaining roadmap (SSB / BFO, memory presets, seek,
+waterfall, themes, settings menu, LW + more SW bands) is tracked in
+[docs/future_improvements.md](docs/future_improvements.md).
+
+**Breaking for anyone running `v1.1.0`**: the OLED artifact is gone
+(there is no more `esp32dev` OLED build) and the shared `radio.cpp` /
+`input.cpp` API signatures changed. The `esp32dev` env name now refers
+to the TFT firmware; upgrade to the TFT shield or stay on
+[`v1.1.0`](https://github.com/aklim/digi_radio_si4732_esp32/releases/tag/v1.1.0).
+
 ### Added
 - **Dual-core radio task.** Si4732 signal (500 ms) and RDS (200 ms)
   polling moved to a dedicated FreeRTOS task pinned to Core 0, leaving
@@ -135,6 +154,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
     [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
     on every `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/aklim/digi_radio_si4732_esp32/releases/tag/v1.0.0
