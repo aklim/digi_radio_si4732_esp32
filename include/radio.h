@@ -188,4 +188,22 @@ uint8_t radioGetAgcAttIdx();
 void    radioSetAgcAttIdx(uint8_t idx);
 bool    radioAgcIsOn();                    // convenience: attIdx == 0
 
+// --- Low-level hooks for the bandscope sweep -------------------------------
+// These expose just enough of the SI4735 for Scan.cpp to retune the chip
+// point-by-point without needing the private g_radio handle. All three
+// take the radio mutex internally.
+//
+// radioScanEnter() suspends the Core-0 polling task's RSSI / RDS work (so
+// it doesn't compete with the sweep) and mutes audio. radioScanExit()
+// tunes back to restoreFreq and resumes normal polling.
+void radioScanEnter();
+void radioScanExit(uint16_t restoreFreq);
+
+// Retune to `freq` (native band units) and return the signal-quality
+// readings. Caller should be inside the scanEnter / scanExit window.
+// `settleMs` is the delay between setFrequency() and the RSSI/SNR read
+// (upstream uses 30 ms, 60 ms FM, 80 ms AM; pass what you like).
+void radioScanMeasure(uint16_t freq, uint16_t settleMs,
+                      uint8_t &outRssi, uint8_t &outSnr);
+
 #endif  // RADIO_H

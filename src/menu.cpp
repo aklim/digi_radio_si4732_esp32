@@ -43,6 +43,7 @@
 #include "input.h"
 #include "ui_layout.h"
 #include "Themes.h"
+#include "Scan.h"
 
 namespace {
 
@@ -65,6 +66,7 @@ struct TopItem { const char* label; MenuCmd cmd; };
 constexpr TopItem TOP_ITEMS[] = {
     { "Band",  CMD_BAND  },
     { "Theme", CMD_THEME },
+    { "Scan",  CMD_SCAN  },
     { "Close", CMD_CLOSE },
 };
 constexpr int TOP_COUNT = sizeof(TOP_ITEMS) / sizeof(TOP_ITEMS[0]);
@@ -262,6 +264,14 @@ void menuHandleClick() {
                 g_cursor = themeIdx;
                 g_dirty  = true;
                 return;
+            case CMD_SCAN: {
+                // Sweep SCAN_POINTS samples centred on the current tune.
+                // Step granularity comes from the band's natural step.
+                const Band *band = radioGetCurrentBand();
+                scanStart(radioGetFrequency(), band->step);
+                menuClose();
+                return;
+            }
             case CMD_CLOSE:
                 menuClose();
                 return;

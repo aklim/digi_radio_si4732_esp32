@@ -39,6 +39,7 @@
 #include "persist.h"
 #include "Themes.h"
 #include "Draw.h"
+#include "Scan.h"
 
 #include "version.h"
 
@@ -262,6 +263,14 @@ void loop() {
             menuClose();
         }
         if (!menuIsOpen()) handleMenuClose();
+    } else if (scanIsActive()) {
+        // During / after a sweep the encoder belongs to the scan —
+        // any click or long-press bails out and restores the listener's
+        // original tune via scanAbort().
+        if (btn == BTN_CLICK || btn == BTN_LONG_PRESS) {
+            scanAbort();
+            markDirty(DIRTY_ALL);
+        }
     } else {
         if (rotated) handleEncoderRotation(encValue);
         if (btn == BTN_CLICK)      toggleMode();
@@ -274,6 +283,13 @@ void loop() {
     // "catches up" on menu close because the poll intervals are self-
     // rate-limited and will fire on the next loop iteration after close.
     if (!menuIsOpen()) {
+        // Advance the bandscope sweep one sample per loop iteration. Each
+        // scanTick takes ~60-80 ms (tune + settle + quality read) so the
+        // full 200-sample sweep completes in ~15 s. Paint after every
+        // sample so the graph fills in progressively.
+        if (scanIsActive() && scanTick()) {
+            markDirty(DIRTY_ALL);
+        }
         if (radioPollSignal()) {
             markDirty(DIRTY_METER | DIRTY_HEADER);
         }

@@ -28,6 +28,7 @@
 #include "radio.h"
 #include "Themes.h"
 #include "Battery.h"
+#include "Scan.h"
 
 // Shared TFT handle — registered by main.cpp via drawInit(). Every widget
 // function writes through this reference, mirroring ATS-Mini's `spr` usage
@@ -360,6 +361,64 @@ static void drawInfo(int x, int y, int sx) {
     s.drawString("--:--", 48 + x, row + 2 * 16, 2);
 
     s.setTextDatum(TL_DATUM);
+}
+
+// ---------------------------------------------------------------------------
+// Bandscope graph — plots SNR (yellow) and RSSI (green) lines on top of
+// a dotted-grid background across the 41 visible ticks of the scale
+// zone. Ported 1:1 from ats-mini/Draw.cpp; freq units match the scale
+// (freq/10 == 100 kHz tick on FM, 10 kHz tick on AM/MW/SW).
+// ---------------------------------------------------------------------------
+void drawScanGraphs(uint32_t freq) {
+    if (!g_tft) return;
+    TFT_eSPI &s = *g_tft;
+
+    // Per-widget clear covers the same band the scale uses.
+    s.fillRect(0, 120, 320, 50, TH.bg);
+
+    int16_t offset = (freq % 10) / 10.0f * 8;
+    freq = freq / 10 - 20;
+
+    const Band *band    = radioGetCurrentBand();
+    uint32_t    minFreq = band->minFreq / 10;
+    uint32_t    maxFreq = band->maxFreq / 10;
+
+    for (int i = 0; i < 41; i++, freq++) {
+        int16_t x = i * 8 - offset;
+        if (freq < minFreq || freq > maxFreq) continue;
+
+        // Vertical grid column every 5 tick positions.
+        if ((freq % 5) == 0) {
+            for (int y = 0; y < 42; y += 2) {
+                s.drawPixel(x, 169 - y, TH.scan_grid);
+            }
+        }
+
+        if ((freq + 1) > maxFreq) continue;
+
+        // Horizontal dotted gridlines every 10 vertical pixels.
+        for (int xd = x; xd < (x + 8); xd += 2) {
+            s.drawPixel(xd, 169 -  0, TH.scan_grid);
+            s.drawPixel(xd, 169 - 10, TH.scan_grid);
+            s.drawPixel(xd, 169 - 20, TH.scan_grid);
+            s.drawPixel(xd, 169 - 30, TH.scan_grid);
+            s.drawPixel(xd, 169 - 40, TH.scan_grid);
+        }
+
+        // SNR line (yellow / theme scan_snr).
+        int snr1 = 40 * scanGetSNR(freq * 10);
+        int snr2 = 40 * scanGetSNR((freq + 1) * 10);
+        s.drawLine(x, 169 - snr1, x + 8, 169 - snr2, TH.scan_snr);
+
+        // RSSI line (green / theme scan_rssi).
+        int rssi1 = 40 * scanGetRSSI(freq * 10);
+        int rssi2 = 40 * scanGetRSSI((freq + 1) * 10);
+        s.drawLine(x, 169 - rssi1, x + 8, 169 - rssi2, TH.scan_rssi);
+    }
+
+    // Centre-frequency pointer (sits above the grid so it always reads).
+    s.fillTriangle(156, 125, 160, 130, 164, 125, TH.scale_pointer);
+    s.drawLine(160, 130, 160, 169, TH.scale_pointer);
 }
 
 void drawSideBar(int x, int y, int sx) {

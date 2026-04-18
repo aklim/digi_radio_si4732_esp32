@@ -31,6 +31,7 @@ enum MenuCmd : uint16_t {
     CMD_NONE   = 0x0000,
     CMD_BAND   = 0x1000,   // pick an entry from radio.h g_bands[]
     CMD_THEME  = 0x1100,   // pick a palette from Themes.h catalogue
+    CMD_SCAN   = 0x1200,   // start a bandscope sweep around current freq
     CMD_CLOSE  = 0xFF00,   // dismiss the menu, return to main UI
 };
 

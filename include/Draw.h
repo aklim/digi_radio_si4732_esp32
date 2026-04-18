@@ -71,6 +71,7 @@ void drawStereoIndicator(int x, int y, bool stereo);
 void drawRadioText(int y, int ymax);
 void drawScale(uint32_t freq);
 void drawSideBar(int x, int y, int sx);
+void drawScanGraphs(uint32_t freq);
 
 // --- Layout orchestrators ---------------------------------------------------
 // Full-screen repaint (draws directly to the provided TFT, no sprite). Call

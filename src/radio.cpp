@@ -128,6 +128,12 @@ static uint8_t g_bwIdxAm = 4;
 // ATS-Mini uses the same convention; see Menu.cpp drawAgc.
 static uint8_t g_agcAttIdx = 0;
 
+// --- Bandscope sweep gate ---------------------------------------------------
+// When Scan.cpp owns the chip it bumps this flag. The Core-0 poll loop
+// bails early so it doesn't fight the sweep for I2C cycles; cached
+// RSSI / RDS values freeze until the scan releases them.
+static volatile bool g_scanActive = false;
+
 // --- FreeRTOS primitives ----------------------------------------------------
 // g_mutex is created in radioInit() *before* any other thread can observe
 // the module. radioStart() creates the task after radioInit() returns, so
@@ -172,6 +178,10 @@ static void applyBandLocked() {
 // value changed; caller (the task) OR-sets g_signalChanged accordingly.
 // Caller holds g_mutex.
 static bool pollSignalLocked() {
+    // Bandscope sweep owns the chip — stay out of its way until it
+    // finishes. Cached RSSI / SNR freeze for the duration, which is
+    // acceptable (UI shows the scan graph, not the live meter).
+    if (g_scanActive) return false;
     unsigned long now = millis();
     if (now - g_lastSignalPoll < SIGNAL_POLL_INTERVAL_MS) return false;
     g_lastSignalPoll = now;
@@ -190,6 +200,7 @@ static bool pollSignalLocked() {
 
 // Poll RDS on the task's cadence. No-op on non-FM bands. Caller holds mutex.
 static bool pollRdsLocked() {
+    if (g_scanActive) return false;
     if (activeBandLocked().mode != MODE_FM) return false;
 
     unsigned long now = millis();
@@ -601,5 +612,44 @@ void radioSetAgcAttIdx(uint8_t idx) {
         // AGC disabled, manual attenuation applied.
         g_radio.setAutomaticGainControl(1, idx);
     }
+    xSemaphoreGive(g_mutex);
+}
+
+// --- Bandscope sweep hooks --------------------------------------------------
+
+void radioScanEnter() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_scanActive = true;
+    // Mute audio so the listener does not hear the freq sweep and its
+    // squeals / unmodulated noise bursts. Unmute in radioScanExit().
+    g_radio.setAudioMute(true);
+    xSemaphoreGive(g_mutex);
+}
+
+void radioScanExit(uint16_t restoreFreq) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    // Restore the listener's original tune and un-mute. Cached RSSI /
+    // SNR will refresh on the next regular pollSignalLocked() call.
+    g_radio.setFrequency(restoreFreq);
+    activeBandLocked().currentFreq = restoreFreq;
+    g_radio.setAudioMute(false);
+    g_scanActive     = false;
+    g_lastSignalPoll = 0;  // force a fresh poll on the next tick
+    g_signalChanged  = true;
+    xSemaphoreGive(g_mutex);
+}
+
+void radioScanMeasure(uint16_t freq, uint16_t settleMs,
+                      uint8_t &outRssi, uint8_t &outSnr) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_radio.setFrequency(freq);
+    // Unlock while the chip settles so the menu / ui can still peek;
+    // we re-lock to read the quality registers.
+    xSemaphoreGive(g_mutex);
+    if (settleMs) delay(settleMs);
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_radio.getCurrentReceivedSignalQuality();
+    outRssi = g_radio.getCurrentRSSI();
+    outSnr  = g_radio.getCurrentSNR();
     xSemaphoreGive(g_mutex);
 }

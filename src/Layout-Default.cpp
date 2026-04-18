@@ -21,6 +21,7 @@
 #include "Draw.h"
 #include "Themes.h"
 #include "radio.h"
+#include "Scan.h"
 
 // Short band-mode label for the mode box. Corresponds to ATS-Mini's
 // `bandModeDesc[currentMode]`.
@@ -101,15 +102,19 @@ void drawLayoutDefault() {
     drawStereoIndicator(METER_OFFSET_X, METER_OFFSET_Y,
                         (band->mode == MODE_FM) && radioIsStereo());
 
-    // Bottom area (y >= 120): band scale when no RadioText is playing,
-    // otherwise the single-line RT readout. Upstream decides the same
-    // way — scale is the default, RT takes over when an RDS stream is
-    // actively transmitting radio text.
-    char rt[65];
-    radioGetRdsRt(rt, sizeof(rt));
-    if (rt[0]) {
-        drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
+    // Bottom area (y >= 120): priority order matches upstream —
+    //   1. Scan graph while a sweep is active or its data is held.
+    //   2. RadioText if the station is sending RT (replaces scale).
+    //   3. Otherwise the static band scale.
+    if (scanIsActive()) {
+        drawScanGraphs(radioGetFrequency());
     } else {
-        drawScale(radioGetFrequency());
+        char rt[65];
+        radioGetRdsRt(rt, sizeof(rt));
+        if (rt[0]) {
+            drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
+        } else {
+            drawScale(radioGetFrequency());
+        }
     }
 }
