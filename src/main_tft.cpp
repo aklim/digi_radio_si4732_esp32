@@ -13,10 +13,13 @@
 //   Encoder      : A=18, B=19, BTN=5
 //   TFT HSPI     : MOSI=13, SCLK=14, MISO=27, CS=15, DC=2, RST=33
 //   Backlight    : GPIO 4 (LEDC PWM)
-//   Touch CS     : GPIO 17 (XPT2046)
+//   Touch CS     : GPIO 17 (XPT2046 — touch support lands in a later commit)
 //
-// This file is a minimal boot/tune/render skeleton — S-meter, RDS, stereo,
-// SNR, focus borders, and touch are layered on in subsequent commits.
+// Rendering: partial redraw driven by a per-zone dirty-flags byte. Each zone
+// is repainted independently by clearing its rect to COL_BG and redrawing
+// content with drawString() + fillRect()/drawRect(). Benchmark in
+// docs/display_shield_test.md (1.83 us/drawString, 46 ms polled full-fill)
+// shows this is fast enough for the <=10 Hz UI rate we trigger in practice.
 // ============================================================================
 
 #include <Arduino.h>
@@ -50,24 +53,42 @@ extern "C" __attribute__((used)) const char FW_IDENTITY[] =
     "FW=" FW_VERSION " commit=" FW_GIT_COMMIT " built=" FW_BUILD_DATE;
 
 // ============================================================================
-// Section 2: Globals & state
+// Section 2: Dirty-flags pipeline
+// ============================================================================
+
+constexpr uint8_t DIRTY_HEADER = 1 << 0;
+constexpr uint8_t DIRTY_FREQ   = 1 << 1;
+constexpr uint8_t DIRTY_RDS    = 1 << 2;
+constexpr uint8_t DIRTY_METER  = 1 << 3;
+constexpr uint8_t DIRTY_VOL    = 1 << 4;
+constexpr uint8_t DIRTY_FOOTER = 1 << 5;
+constexpr uint8_t DIRTY_ALL    = 0x3F;
+
+static uint8_t dirtyFlags = DIRTY_ALL;
+
+static inline void markDirty(uint8_t bits) { dirtyFlags |= bits; }
+
+// ============================================================================
+// Section 3: Globals & state
 // ============================================================================
 
 static TFT_eSPI tft = TFT_eSPI();
 
-static AdjustMode currentMode        = MODE_FREQUENCY;
-static bool       displayNeedsUpdate = true;
+static AdjustMode currentMode = MODE_FREQUENCY;
 
 // ============================================================================
-// Section 3: Forward declarations
+// Section 4: Forward declarations
 // ============================================================================
 
 static void initBacklight();
 static void initDisplay();
 static void drawSplash();
+
 static void updateDisplay();
 static void drawHeader();
 static void drawFrequency();
+static void drawRds();
+static void drawMeter();
 static void drawVolume();
 static void drawFooter();
 
@@ -75,7 +96,7 @@ static void handleEncoderRotation(long value);
 static void toggleMode();
 
 // ============================================================================
-// Section 4: setup() / loop()
+// Section 5: setup() / loop()
 // ============================================================================
 
 void setup() {
@@ -98,7 +119,7 @@ void setup() {
     encoderSetBoundsForMode(currentMode, radioGetFrequency(), radioGetVolume());
 
     tft.fillScreen(COL_BG);
-    displayNeedsUpdate = true;
+    dirtyFlags = DIRTY_ALL;
     Serial.println(F("Digital Radio (TFT) — ready."));
 }
 
@@ -111,15 +132,17 @@ void loop() {
         toggleMode();
     }
     if (radioPollSignal()) {
-        // In this minimal commit the signal poll does not yet drive any UI
-        // element (S-meter lands in commit 3). Still call it to populate the
-        // cache and flip displayNeedsUpdate in case a later layer uses it.
+        // Stereo pilot lives in the header; RSSI/SNR in the meter zone.
+        markDirty(DIRTY_METER | DIRTY_HEADER);
+    }
+    if (radioPollRds()) {
+        markDirty(DIRTY_RDS);
     }
     updateDisplay();
 }
 
 // ============================================================================
-// Section 5: Input handling
+// Section 6: Input handling
 // ============================================================================
 
 static void handleEncoderRotation(long value) {
@@ -129,14 +152,16 @@ static void handleEncoderRotation(long value) {
         if (newFreq > FM_FREQ_MAX) newFreq = FM_FREQ_MAX;
         if (newFreq != radioGetFrequency()) {
             radioSetFrequency(newFreq);
-            displayNeedsUpdate = true;
+            // Tune clears RDS mirrors; repaint the RDS zone so old text goes
+            // away immediately instead of waiting for the next 200 ms poll.
+            markDirty(DIRTY_FREQ | DIRTY_FOOTER | DIRTY_RDS);
         }
     } else {
         uint8_t newVol = (uint8_t)value;
         if (newVol > MAX_VOLUME) newVol = MAX_VOLUME;
         if (newVol != radioGetVolume()) {
             radioSetVolume(newVol);
-            displayNeedsUpdate = true;
+            markDirty(DIRTY_VOL);
         }
     }
 }
@@ -144,13 +169,14 @@ static void handleEncoderRotation(long value) {
 static void toggleMode() {
     currentMode = (currentMode == MODE_FREQUENCY) ? MODE_VOLUME : MODE_FREQUENCY;
     encoderSetBoundsForMode(currentMode, radioGetFrequency(), radioGetVolume());
-    displayNeedsUpdate = true;
+    // Focus border colour depends on currentMode — repaint both bordered zones.
+    markDirty(DIRTY_FREQ | DIRTY_VOL);
     Serial.print(F("Mode: "));
     Serial.println((currentMode == MODE_FREQUENCY) ? F("FREQUENCY") : F("VOLUME"));
 }
 
 // ============================================================================
-// Section 6: Display
+// Section 7: Display
 // ============================================================================
 
 static void initBacklight() {
@@ -177,24 +203,32 @@ static void drawSplash() {
     tft.setTextDatum(TL_DATUM);
 }
 
-// For the minimal commit we do a full repaint-when-dirty; commit 3 will
-// split the pipeline into per-zone dirty flags so unchanged areas are not
-// re-touched.
 static void updateDisplay() {
-    if (!displayNeedsUpdate) return;
-    displayNeedsUpdate = false;
+    if (!dirtyFlags) return;
 
-    drawHeader();
-    drawFrequency();
-    drawVolume();
-    drawFooter();
+    if (dirtyFlags & DIRTY_HEADER) drawHeader();
+    if (dirtyFlags & DIRTY_FREQ)   drawFrequency();
+    if (dirtyFlags & DIRTY_RDS)    drawRds();
+    if (dirtyFlags & DIRTY_METER)  drawMeter();
+    if (dirtyFlags & DIRTY_VOL)    drawVolume();
+    if (dirtyFlags & DIRTY_FOOTER) drawFooter();
+
+    dirtyFlags = 0;
 }
 
 static void drawHeader() {
     tft.fillRect(0, HEADER_Y, SCREEN_W, HEADER_H, COL_HEADER_BG);
-    tft.setTextColor(COL_HEADER_TXT, COL_HEADER_BG);
+
     tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(COL_HEADER_TXT, COL_HEADER_BG);
     tft.drawString("FM", HEADER_MODE_X, HEADER_MODE_Y, FONT_LABEL);
+
+    // Stereo pilot indicator — only meaningful once the radio has locked; we
+    // still paint "MONO" when the flag is false so the label position is
+    // predictable from boot.
+    bool stereo = radioIsStereo();
+    tft.setTextColor(stereo ? COL_STEREO_ON : COL_STEREO_OFF, COL_HEADER_BG);
+    tft.drawString(stereo ? "STEREO" : " MONO ", HEADER_ST_X, HEADER_ST_Y, FONT_SMALL);
 
     // Right-aligned version string.
     tft.setTextColor(COL_VERSION, COL_HEADER_BG);
@@ -205,6 +239,11 @@ static void drawHeader() {
 
 static void drawFrequency() {
     tft.fillRect(0, FREQ_Y, SCREEN_W, FREQ_H, COL_BG);
+
+    // 1-pixel focus border — colour depends on which mode the encoder drives.
+    uint16_t border = (currentMode == MODE_FREQUENCY) ? COL_FOCUS : COL_NOFOCUS;
+    tft.drawRect(0, FREQ_Y, SCREEN_W, FREQ_H, border);
+
     tft.setTextColor(COL_FREQ_TXT, COL_BG);
 
     uint16_t freq = radioGetFrequency();
@@ -212,18 +251,84 @@ static void drawFrequency() {
     snprintf(buf, sizeof(buf), "%u.%u", freq / 100, (freq % 100) / 10);
 
     tft.setTextDatum(MC_DATUM);
-    tft.drawString(buf, SCREEN_W / 2 - 20, FREQ_TEXT_Y + FREQ_H / 2 - 12, FONT_BIG);
+    // Slight left-shift of centre so "MHz" has room on the right.
+    tft.drawString(buf, SCREEN_W / 2 - 20, FREQ_Y + FREQ_H / 2, FONT_BIG);
     tft.setTextDatum(TL_DATUM);
 
     tft.setTextColor(COL_LABEL_TXT, COL_BG);
     tft.drawString("MHz", FREQ_UNIT_X, FREQ_UNIT_Y, FONT_LABEL);
 }
 
+static void drawRds() {
+    tft.fillRect(0, RDS_Y, SCREEN_W, RDS_H, COL_BG);
+
+    const char* ps = radioGetRdsPs();
+    const char* rt = radioGetRdsRt();
+
+    tft.setTextDatum(TL_DATUM);
+
+    // PS name — "PS:" label in dim grey, then the 8-char name in white. When
+    // there is no RDS sync we show "--" so the zone is never empty on boot.
+    tft.setTextColor(COL_DIM_TXT, COL_BG);
+    tft.drawString("PS:", RDS_PS_X, RDS_PS_Y, FONT_LABEL);
+    tft.setTextColor(COL_LABEL_TXT, COL_BG);
+    tft.drawString(ps && ps[0] ? ps : "--", RDS_PS_X + 54, RDS_PS_Y, FONT_LABEL);
+
+    // RadioText body — FONT2, truncated to fit the screen width. Marquee
+    // scrolling is v2 (see docs/future_improvements.md).
+    tft.setTextColor(COL_DIM_TXT, COL_BG);
+    if (rt && rt[0]) {
+        char line[RDS_RT_MAX_CHARS + 1];
+        strncpy(line, rt, RDS_RT_MAX_CHARS);
+        line[RDS_RT_MAX_CHARS] = 0;
+        tft.drawString(line, RDS_RT_X, RDS_RT_Y, FONT_SMALL);
+    }
+}
+
+static void drawMeter() {
+    tft.fillRect(0, METER_Y, SCREEN_W, METER_H, COL_BG);
+
+    // "RSSI" label + horizontal bar + numeric dBuV.
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(COL_LABEL_TXT, COL_BG);
+    tft.drawString("RSSI", METER_LABEL_X, METER_BAR_Y - 1, FONT_SMALL);
+
+    uint8_t rssi = radioGetRssi();
+    int fill = map(constrain((int)rssi, 0, RSSI_SCALE_MAX_DBUV),
+                   0, RSSI_SCALE_MAX_DBUV, 0, METER_BAR_W);
+    tft.fillRect(METER_BAR_X, METER_BAR_Y, fill, METER_BAR_H, COL_METER_FILL);
+    tft.drawRect(METER_BAR_X, METER_BAR_Y, METER_BAR_W, METER_BAR_H, COL_METER_FRAME);
+
+    // Tick marks every 10 dBuV so users can see the scale.
+    for (int dbuv = 10; dbuv < RSSI_SCALE_MAX_DBUV; dbuv += 10) {
+        int tx = METER_BAR_X + map(dbuv, 0, RSSI_SCALE_MAX_DBUV, 0, METER_BAR_W);
+        tft.drawFastVLine(tx, METER_BAR_Y - 2, 2, COL_METER_FRAME);
+    }
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u dB", rssi);
+    tft.drawString(buf, METER_VAL_X, METER_VAL_Y, FONT_SMALL);
+
+    // SNR on the second row, plus a small stereo dot on the far right.
+    snprintf(buf, sizeof(buf), "SNR  %u dB", radioGetSnr());
+    tft.drawString(buf, METER_LABEL_X, METER_ROW2_Y, FONT_SMALL);
+
+    bool stereo = radioIsStereo();
+    tft.fillCircle(STEREO_DOT_X, STEREO_DOT_Y, STEREO_DOT_R,
+                   stereo ? COL_STEREO_ON : COL_STEREO_OFF);
+    tft.setTextColor(COL_DIM_TXT, COL_BG);
+    tft.drawString("stereo", STEREO_DOT_X - 58, METER_ROW2_Y, FONT_SMALL);
+}
+
 static void drawVolume() {
     tft.fillRect(0, VOL_Y, SCREEN_W, VOL_H, COL_BG);
 
-    tft.setTextColor(COL_LABEL_TXT, COL_BG);
+    // Focus border — yellow in VOLUME mode, dim grey otherwise.
+    uint16_t border = (currentMode == MODE_VOLUME) ? COL_FOCUS : COL_NOFOCUS;
+    tft.drawRect(0, VOL_Y, SCREEN_W, VOL_H, border);
+
     tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(COL_LABEL_TXT, COL_BG);
     tft.drawString("Vol", VOL_LABEL_X, VOL_LABEL_Y, FONT_LABEL);
 
     uint8_t vol = radioGetVolume();
@@ -242,6 +347,8 @@ static void drawFooter() {
     tft.setTextDatum(TL_DATUM);
 
     char buf[48];
-    snprintf(buf, sizeof(buf), "%s  %s", FW_VERSION, POWER_SOURCE);
+    uint16_t f = radioGetFrequency();
+    snprintf(buf, sizeof(buf), "%s  %s  %u.%u MHz",
+             FW_VERSION, POWER_SOURCE, f / 100, (f % 100) / 10);
     tft.drawString(buf, FOOTER_TXT_X, FOOTER_TXT_Y, FONT_SMALL);
 }
