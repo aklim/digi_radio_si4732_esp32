@@ -123,10 +123,17 @@ static uint8_t g_bwIdxFm = 0;
 static uint8_t g_bwIdxAm = 4;
 
 // --- AGC + manual attenuator (packed into SI4735's AGCDIS / AGCIDX) --------
-// idx == 0      -> AGCDIS=0 (enabled), AGCIDX ignored
-// idx == 1..37  -> AGCDIS=1 (disabled), AGCIDX = idx
-// ATS-Mini uses the same convention; see Menu.cpp drawAgc.
-static uint8_t g_agcAttIdx = 0;
+// Per-mode shadows, matching ATS-Mini's doAgc() (Menu.cpp:754-773):
+//   idx == 0      -> AGCDIS=0 (enabled), AGCIDX ignored
+//   idx == 1      -> AGCDIS=1 (disabled), AGCIDX = 0 (no attenuation)
+//   idx == 2..N   -> AGCDIS=1 (disabled), AGCIDX = idx - 1
+// FM range: 0..kAgcIdxMaxFm (28 entries); AM range: 0..kAgcIdxMaxAm (38).
+// FM and AM are tracked independently so switching bands between modes
+// doesn't clobber the other mode's setting.
+constexpr uint8_t kAgcIdxMaxFm = 27;
+constexpr uint8_t kAgcIdxMaxAm = 37;
+static uint8_t g_agcIdxFm = 0;
+static uint8_t g_agcIdxAm = 0;
 
 // --- Bandscope sweep gate ---------------------------------------------------
 // When Scan.cpp owns the chip it bumps this flag. The Core-0 poll loop
@@ -152,6 +159,37 @@ constexpr TickType_t  RADIO_TASK_TICK  = pdMS_TO_TICKS(20);
 
 static Band& activeBandLocked() { return g_bands[g_bandIdx]; }
 
+// Re-apply the active mode's saved BW / AGC indices to the chip. Pulled out
+// of the public setters so applyBandLocked() can call them after setFM /
+// setAM without re-entering the mutex. Caller holds g_mutex.
+static void applyBwLocked() {
+    BandMode mode = activeBandLocked().mode;
+    if (mode == MODE_FM) {
+        uint8_t idx = g_bwIdxFm;
+        if (idx >= kBwFmCount) idx = 0;
+        g_radio.setFmBandwidth(kBwFm[idx].filter);
+    } else {
+        uint8_t idx = g_bwIdxAm;
+        if (idx >= kBwAmCount) idx = 4;  // 3.0 kHz default
+        // AMPLFLT=1 enables the power-line noise filter (ATS-Mini default).
+        g_radio.setBandwidth(kBwAm[idx].filter, 1);
+    }
+}
+
+static void applyAgcLocked() {
+    BandMode mode = activeBandLocked().mode;
+    uint8_t idx   = (mode == MODE_FM) ? g_agcIdxFm : g_agcIdxAm;
+    uint8_t maxIdx = (mode == MODE_FM) ? kAgcIdxMaxFm : kAgcIdxMaxAm;
+    if (idx > maxIdx) idx = 0;
+    if (idx == 0) {
+        // AGC enabled, attenuator ignored.
+        g_radio.setAutomaticGainControl(0, 0);
+    } else {
+        // AGC disabled, AGCIDX = idx - 1 (per ATS-Mini's doAgc convention).
+        g_radio.setAutomaticGainControl(1, idx - 1);
+    }
+}
+
 // Apply the current band's settings to the Si4735. Caller holds g_mutex.
 static void applyBandLocked() {
     Band& b = activeBandLocked();
@@ -172,6 +210,12 @@ static void applyBandLocked() {
     // volume untouched at the chip level, but re-applying costs one I2C
     // write and eliminates any doubt about post-switch state.
     g_radio.setVolume(g_volume);
+
+    // Re-apply the active mode's saved BW + AGC so user selections survive
+    // band switches. Without this, setFM/setAM reverts the chip to each
+    // mode's power-on default on every band switch (FM: Auto, AM: 2 kHz).
+    applyBwLocked();
+    applyAgcLocked();
 }
 
 // Poll signal quality on the task's cadence. Returns true when any cached
@@ -198,6 +242,52 @@ static bool pollSignalLocked() {
     return changed;
 }
 
+// Copy the PU2CLR library's RadioText buffer into `dst` (65 bytes), dropping
+// leading whitespace, folding mid-buffer control / high bytes to spaces, and
+// right-trimming the result. Returns true iff the cleaned string contains
+// at least one printable non-space character.
+//
+// Why this lives in radio.cpp (not the UI): the library's rds_buffer2A[]
+// can carry garbage for up to three 32-ms RDS blocks before a fresh 2A
+// group fully assembles, and on weak signal can contain all-zero or
+// all-control-char runs. Letting the UI decide whether to render it led
+// to occasional blank / non-printable flashes in the RT row (v2.1.0
+// fixed most cases via a Layout-Default scan, but stations that drip a
+// single stray 0x2F-lookalike into the buffer slipped through). Gating
+// at the source is the only way to guarantee "if g_rt is non-empty,
+// it's real printable text".
+//
+// Strategy matches ATS-Mini's showRadioText (Station.cpp:123-165):
+//   - skip leading whitespace,
+//   - copy up to 64 bytes, replacing non-printables with ' ',
+//   - right-trim trailing whitespace,
+//   - NUL-terminate.
+static bool sanitizeRt(const char *src, char *dst, size_t dstSize) {
+    if (!src || !dst || dstSize < 2) return false;
+    // Skip leading whitespace (ASCII <= 0x20) up to the first 64 bytes.
+    size_t i = 0;
+    while (i < 64 && src[i] && (uint8_t)src[i] <= ' ') i++;
+
+    size_t j = 0;
+    size_t limit = dstSize - 1;
+    bool anyPrintable = false;
+    for (; i < 64 && src[i] && j < limit; i++) {
+        uint8_t c = (uint8_t)src[i];
+        // CR/LF terminate the text (matches PU2CLR library convention).
+        if (c == 0x0D || c == 0x0A) break;
+        if (c < 0x20 || c > 0x7E) {
+            dst[j++] = ' ';
+        } else {
+            dst[j++] = (char)c;
+            if (c != ' ') anyPrintable = true;
+        }
+    }
+    // Right-trim trailing whitespace.
+    while (j > 0 && dst[j - 1] == ' ') j--;
+    dst[j] = 0;
+    return anyPrintable && j > 0;
+}
+
 // Poll RDS on the task's cadence. No-op on non-FM bands. Caller holds mutex.
 static bool pollRdsLocked() {
     if (g_scanActive) return false;
@@ -212,7 +302,10 @@ static bool pollRdsLocked() {
     // INTACK=0, MTFIFO=0, STATUSONLY=0 — normal status read with ack of queued data.
     g_radio.getRdsStatus();
 
-    if (g_radio.getRdsSync()) {
+    // Triple-gate matching ATS-Mini (Station.cpp:233): Received + Sync +
+    // SyncFound. Without SyncFound the library sometimes hands back
+    // partially-aligned garbage that looks receive-worthy but isn't.
+    if (g_radio.getRdsSync() && g_radio.getRdsSyncFound()) {
         g_lastRdsSync = now;
 
         if (g_radio.getRdsReceived()) {
@@ -220,14 +313,35 @@ static bool pollRdsLocked() {
             char* libRt = g_radio.getRdsText2A();       // 2A group -> RadioText
 
             if (libPs && strncmp(g_ps, libPs, 8) != 0) {
+                // PS is short (8 chars) and changes rarely enough that a
+                // direct copy is fine; the UI has its own scroll guard.
                 strncpy(g_ps, libPs, 8);
                 g_ps[8] = 0;
                 changed = true;
             }
-            if (libRt && strncmp(g_rt, libRt, 64) != 0) {
-                strncpy(g_rt, libRt, 64);
-                g_rt[64] = 0;
-                changed = true;
+
+            // RT goes through the sanitiser. We only publish when the
+            // sanitised buffer is non-empty and actually differs from the
+            // previous published value — empty / all-control-char inputs
+            // leave g_rt untouched so the UI keeps showing the last good
+            // text (or falls back to the band scale if g_rt was already
+            // empty).
+            //
+            // cleaned[] MUST be fully zero-initialised before sanitize so
+            // that every byte past the written terminator is also NUL.
+            // drawRadioText uses a multi-line walk `rt += strlen(rt)+1`
+            // expecting double-NUL termination (ATS-Mini convention); if
+            // we memcpy 65 bytes with stack garbage after the first NUL,
+            // the UI renders random characters where the band scale
+            // should be.
+            if (libRt) {
+                char cleaned[65] = {0};
+                if (sanitizeRt(libRt, cleaned, sizeof(cleaned))) {
+                    if (strncmp(g_rt, cleaned, 64) != 0) {
+                        memcpy(g_rt, cleaned, 65);
+                        changed = true;
+                    }
+                }
             }
 
             // PI is part of every RDS block and usually arrives within the
@@ -569,28 +683,52 @@ void radioSetBandwidthIdx(uint8_t idx) {
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     BandMode mode = activeBandLocked().mode;
     uint8_t count, _idx;
-    const BwEntry *tbl = currentBwTable(mode, count, _idx);
-    if (idx >= count) idx = 0;
+    (void)currentBwTable(mode, count, _idx);
+    if (idx >= count) idx = count - 1;
 
     // Stash the new index in the mode-specific slot so it survives a
     // band switch that doesn't change mode (FM -> FM, AM -> AM ...).
-    if (mode == MODE_FM) {
+    if (mode == MODE_FM) g_bwIdxFm = idx;
+    else                 g_bwIdxAm = idx;
+    applyBwLocked();
+    xSemaphoreGive(g_mutex);
+}
+
+// Seed the BW shadow for one mode without touching the chip. Used at boot
+// (main.cpp setup() before radioInit() returns) to load NVS values into
+// radio.cpp's mutable state; the subsequent applyBandLocked() inside
+// radioInit() picks them up on the first setFM / setAM sequence.
+//
+// Safe to call before the radio task starts (mutex already exists after
+// radioInit() creates it; before radioInit() the caller must not race). No
+// I2C traffic happens here so the order relative to chip power-up is free.
+void radioSeedBandwidthIdx(bool fm, uint8_t idx) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    if (fm) {
+        if (idx >= kBwFmCount) idx = 0;
         g_bwIdxFm = idx;
-        g_radio.setFmBandwidth(tbl[idx].filter);
     } else {
+        if (idx >= kBwAmCount) idx = 4;
         g_bwIdxAm = idx;
-        // AM setBandwidth takes a second "AMPLFLT" argument — pass 1 to
-        // enable the power-line noise filter, matching upstream.
-        g_radio.setBandwidth(tbl[idx].filter, 1);
     }
     xSemaphoreGive(g_mutex);
 }
 
 // --- AGC + attenuator -------------------------------------------------------
+// Per-mode indices to match ATS-Mini (FmAgcIdx 0..27, AmAgcIdx 0..37).
+// `radioGetAgcAttIdx` / `radioSetAgcAttIdx` operate on the currently-active
+// mode's slot; see header for the index semantics.
 
 uint8_t radioGetAgcAttIdx() {
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    uint8_t v = g_agcAttIdx;
+    uint8_t v = (activeBandLocked().mode == MODE_FM) ? g_agcIdxFm : g_agcIdxAm;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+uint8_t radioGetAgcAttMax() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t v = (activeBandLocked().mode == MODE_FM) ? kAgcIdxMaxFm : kAgcIdxMaxAm;
     xSemaphoreGive(g_mutex);
     return v;
 }
@@ -600,18 +738,33 @@ bool radioAgcIsOn() {
 }
 
 void radioSetAgcAttIdx(uint8_t idx) {
-    // SI4735 accepts 0..37 (AGCIDX when AGCDIS=1). Clamp so bad values
-    // from the UI can't wander into undefined territory.
-    if (idx > 37) idx = 37;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_agcAttIdx = idx;
-    if (idx == 0) {
-        // AGC enabled, attenuator index ignored.
-        g_radio.setAutomaticGainControl(0, 0);
+    BandMode mode = activeBandLocked().mode;
+    uint8_t maxIdx = (mode == MODE_FM) ? kAgcIdxMaxFm : kAgcIdxMaxAm;
+    if (idx > maxIdx) idx = maxIdx;
+    if (mode == MODE_FM) g_agcIdxFm = idx;
+    else                 g_agcIdxAm = idx;
+    applyAgcLocked();
+    xSemaphoreGive(g_mutex);
+}
+
+// Seed the AGC shadow for one mode without touching the chip; see
+// radioSeedBandwidthIdx() above for the intended usage pattern.
+void radioSeedAgcIdx(bool fm, uint8_t idx) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    if (fm) {
+        if (idx > kAgcIdxMaxFm) idx = 0;
+        g_agcIdxFm = idx;
     } else {
-        // AGC disabled, manual attenuation applied.
-        g_radio.setAutomaticGainControl(1, idx);
+        if (idx > kAgcIdxMaxAm) idx = 0;
+        g_agcIdxAm = idx;
     }
+    xSemaphoreGive(g_mutex);
+}
+
+void radioApplyCurrentBand() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    applyBandLocked();
     xSemaphoreGive(g_mutex);
 }
 

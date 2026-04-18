@@ -39,34 +39,82 @@ long-press threshold lives in
 ```
 ┌─ Menu ────────────────┐
 │  Band                 │   <- highlighted
+│  BW                   │
+│  AGC                  │
+│  Theme                │
+│  Scan                 │
 │  Close                │
-│                       │
 │ Rotate = select       │
 │ Click  = confirm      │
 └───────────────────────┘
-                │ click "Band"
-                ▼
+     │ click one of:
+     ├─ "Band"  → band picker
+     ├─ "BW"    → IF-filter picker (mode-dependent list)
+     ├─ "AGC"   → AGC / manual attenuator picker
+     ├─ "Theme" → palette picker
+     ├─ "Scan"  → start bandscope sweep, close menu
+     └─ "Close" → close menu
+
 ┌─ Band ────────────────┐
 │  FM Broadcast     *   │   <- "*" = currently active band
 │  MW                   │
 │  SW 41m               │
 │  SW 31m               │
 │  < Back               │
-│                       │
 │ * = current band      │
+└───────────────────────┘
+
+┌─ BW (FM) ─────────────┐    ┌─ BW (AM/SW) ──────────┐
+│  Auto             *   │    │  1.0k                 │
+│  110k                 │    │  1.8k                 │
+│  84k                  │    │  2.0k                 │
+│  60k                  │    │  2.5k                 │
+│  40k                  │    │  3.0k             *   │
+│  < Back               │    │  4.0k                 │
+│ * = active filter     │    │  6.0k                 │
+└───────────────────────┘    │  < Back               │
+                             │ * = active filter     │
+                             └───────────────────────┘
+
+┌─ AGC ─────────────────┐
+│  AGC On           *   │   <- row 0: AGC enabled
+│  AGC Off              │   <- row 1: AGC off, no attenuation
+│  Att 01               │
+│  Att 02               │
+│  …                    │   <- FM: up to Att 27 / AM: up to Att 37
+│  < Back               │
+│ * = active AGC        │
 └───────────────────────┘
 ```
 
 Controls inside the menu:
 
-- Rotate encoder — move the highlight. Wraps at both ends.
+- Rotate encoder — move the highlight. Wraps at both ends; long lists
+  (AGC) scroll so the cursor stays on-screen.
 - Click — confirm: descend into a sub-list or commit a selection.
 - Long-press — back out to the main UI without changing anything (a
   quick escape hatch if you opened the menu by accident).
 
-Selecting a band row switches immediately, saves the change to NVS, and
-closes the menu. `< Back` in the band picker returns to the top list
-without touching the radio.
+### Pickers
+
+- **Band** — switches immediately, saves the new band to NVS, and closes
+  the menu. `< Back` returns to the top list without touching the radio.
+- **BW** — list adapts to the active band's mode: 5 rows on FM (filters
+  `Auto`, `110k`, `84k`, `60k`, `40k`), 7 rows on AM/SW (`1.0k` .. `6.0k`
+  step tables). FM and AM keep independent selections so switching
+  modes restores each mode's preferred filter.
+- **AGC** — row 0 enables AGC, row 1 disables it with no attenuation,
+  rows 2+ are manual attenuator steps (`Att 01` .. `Att NN`). FM
+  supports up to `Att 27`, AM/SW up to `Att 37`. Indices follow ATS-Mini
+  `doAgc` semantics: row `N` writes AGCIDX = `N-1` with AGCDIS=1.
+- **Theme** — one row per palette in [src/Themes.cpp](../src/Themes.cpp);
+  selection applies immediately and persists.
+- **Scan** — kicks off the bandscope sweep centred on the current tune
+  and closes the menu. During the sweep the encoder is ignored; once
+  the sweep completes, the encoder tunes normally and the graph scrolls
+  to track the new frequency (matches ATS-Mini CMD_SCAN). Click exits
+  the scan keeping the current tune; long-press exits and restores the
+  pre-scan frequency.
 
 ## Persistence
 
@@ -80,6 +128,12 @@ Runtime state is stored in the ESP32 NVS partition via `<Preferences.h>`
 - `freq<N>`   — per-band last-tuned frequency, where `<N>` is the band
                 index. Stored in the band's native unit (10 kHz for FM,
                 1 kHz for AM).
+- `theme`     — active UI palette index (see
+                [src/Themes.cpp](../src/Themes.cpp)). Added in v2.
+- `bw_fm`     — FM IF-filter index (0..4). Added in v3. Default 0 (Auto).
+- `bw_am`     — AM/SW IF-filter index (0..6). Added in v3. Default 4 (3.0k).
+- `agc_fm`    — FM AGC/attenuator index (0..27). Added in v3. Default 0 (AGC on).
+- `agc_am`    — AM/SW AGC/attenuator index (0..37). Added in v3. Default 0.
 
 Writes are coalesced with a 1-second rate limit inside
 [src/persist.cpp](../src/persist.cpp), so rapid encoder rotation doesn't
@@ -121,3 +175,15 @@ After flashing `pio run -e esp32dev -t upload`:
    repaints.
 10. Rapid encoder rotation: watch Serial — `persistSaveFrequency` writes
     should settle at ≥1 s intervals, not per-detent.
+11. Long-press → **BW** → pick a non-default filter (e.g. `60k` on FM).
+    Sidebar BW row updates; reboot → filter persists.
+12. Switch to MW via `Band` picker. Open `BW` again — list now shows 7
+    AM-catalogue entries; default is `3.0k`. Pick `1.8k`, switch back
+    to FM — the FM filter (`60k`) is restored, proving per-mode shadows.
+13. Long-press → **AGC** → pick `Att 05`. On a strong FM station the
+    audio audibly attenuates; sidebar row flips from `AGC:On` to
+    `Att:5`. Reboot → attenuator persists.
+14. Long-press → **Scan**. Wait for `[scan] complete` on serial (~15 s).
+    Rotate encoder → tune shifts and the graph scrolls to follow.
+    Click → scan exits at the new tune. Re-enter scan → long-press
+    → scan exits and restores the pre-scan frequency.

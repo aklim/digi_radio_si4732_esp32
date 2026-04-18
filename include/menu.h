@@ -27,12 +27,19 @@ class TFT_eSPI;  // forward-declared to keep the header light
 // matches ats-mini/Menu.h so follow-up PRs can add entries from the
 // ATS-Mini catalogue (CMD_VOLUME, CMD_AGC, CMD_BANDWIDTH, CMD_STEP, ...)
 // without colliding with anything here.
+// Slot assignments match ATS-Mini (ats-mini/Menu.h): CMD_AGC=0x1200 and
+// CMD_BANDWIDTH=0x1300 are the upstream slots, CMD_SCAN lands at 0x1B00
+// alongside the sweep / seek cluster. Our legacy CMD_SCAN=0x1200 moved
+// to 0x1B00 in v2.2 — codes are internal enums and not persisted, so
+// existing builds need no migration.
 enum MenuCmd : uint16_t {
-    CMD_NONE   = 0x0000,
-    CMD_BAND   = 0x1000,   // pick an entry from radio.h g_bands[]
-    CMD_THEME  = 0x1100,   // pick a palette from Themes.h catalogue
-    CMD_SCAN   = 0x1200,   // start a bandscope sweep around current freq
-    CMD_CLOSE  = 0xFF00,   // dismiss the menu, return to main UI
+    CMD_NONE      = 0x0000,
+    CMD_BAND      = 0x1000,   // pick an entry from radio.h g_bands[]
+    CMD_AGC       = 0x1200,   // AGC on/off + manual attenuator
+    CMD_BANDWIDTH = 0x1300,   // pick Si4732 IF filter for current mode
+    CMD_THEME     = 0x2600,   // pick a palette from Themes.h catalogue
+    CMD_SCAN      = 0x1B00,   // start a bandscope sweep around current freq
+    CMD_CLOSE     = 0xFF00,   // dismiss the menu, return to main UI
 };
 
 // Is the menu currently taking over the screen? Main loop consults this to

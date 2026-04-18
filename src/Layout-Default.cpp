@@ -48,15 +48,50 @@ static void shortBandName(const char *full, char *buf, size_t n) {
     buf[i] = '\0';
 }
 
-// Linear RSSI-to-strength map: 0..60 dBuV -> 0..49 segments. ATS-Mini's
-// upstream uses a per-modulation threshold table (AM vs FM vs SSB); we'll
-// port that once drawSMeter gains its own config step. This linear stub is
-// functionally correct and keeps the bar lively during normal tuning.
+// RSSI → S-point conversion, ported 1:1 from ATS-Mini's Utils.cpp
+// (getStrength, ats-mini/Utils.cpp:417-458). Two step-tables — one for
+// FM, one for AM/SW — map dBuV values to S0..S9+60 (strength 1..17).
+// drawSMeter renders `strength` segments of 4 px pitch starting at x+15;
+// the stereo indicator mask is sized exactly for 17 segments, so keeping
+// strength inside 1..17 is what makes the split-bar effect look right.
+//
+// Previous stub returned 0..49 (linear 0..60 dBuV), which made the meter
+// three times longer than ATS-Mini's and left the stereo stripe only
+// covering the first third of the bar.
 static int strengthFromRssi(uint8_t rssi) {
-    int s = (int)rssi * 49 / 60;
-    if (s < 0) s = 0;
-    if (s > 49) s = 49;
-    return s;
+    const Band *band = radioGetCurrentBand();
+    if (band && band->mode == MODE_FM) {
+        if (rssi <=  1) return  1;   // S0
+        if (rssi <=  2) return  7;   // S6
+        if (rssi <=  8) return  8;   // S7
+        if (rssi <= 14) return  9;   // S8
+        if (rssi <= 24) return 10;   // S9
+        if (rssi <= 34) return 11;   // S9 +10
+        if (rssi <= 44) return 12;   // S9 +20
+        if (rssi <= 54) return 13;   // S9 +30
+        if (rssi <= 64) return 14;   // S9 +40
+        if (rssi <= 74) return 15;   // S9 +50
+        if (rssi <= 76) return 16;   // S9 +60
+        return               17;     // >S9 +60
+    }
+    // AM / SW / MW
+    if (rssi <=  1) return  1;
+    if (rssi <=  2) return  2;
+    if (rssi <=  3) return  3;
+    if (rssi <=  4) return  4;
+    if (rssi <= 10) return  5;
+    if (rssi <= 16) return  6;
+    if (rssi <= 22) return  7;
+    if (rssi <= 28) return  8;
+    if (rssi <= 34) return  9;
+    if (rssi <= 44) return 10;
+    if (rssi <= 54) return 11;
+    if (rssi <= 64) return 12;
+    if (rssi <= 74) return 13;
+    if (rssi <= 84) return 14;
+    if (rssi <= 94) return 15;
+    if (rssi <= 95) return 16;
+    return                 17;
 }
 
 void drawLayoutDefault() {
@@ -104,30 +139,16 @@ void drawLayoutDefault() {
 
     // Bottom area (y >= 120): priority order matches upstream —
     //   1. Scan graph while a sweep is active or its data is held.
-    //   2. RadioText if the station is sending RT with actual printable
-    //      characters (not just an empty / all-control-char buffer, which
-    //      some stations drip into the library mirror on partial decode).
+    //   2. RadioText if the station is sending RT — radio.cpp's
+    //      sanitiser guarantees g_rt is either empty or real printable
+    //      text, so a simple rt[0] test is authoritative here.
     //   3. Otherwise the static band scale.
     if (scanIsActive()) {
         drawScanGraphs(radioGetFrequency());
     } else {
         char rt[65];
         radioGetRdsRt(rt, sizeof(rt));
-
-        bool rtPrintable = false;
-        for (size_t i = 0; i < sizeof(rt) && rt[i]; i++) {
-            // ASCII 0x20..0x7E is the readable range. Anything outside
-            // (control chars, nulls, 8-bit junk) means "not real RT yet"
-            // and we fall through to the scale.
-            if ((uint8_t)rt[i] >= 0x20 && (uint8_t)rt[i] <= 0x7E) {
-                rtPrintable = true;
-                break;
-            }
-        }
-        if (rtPrintable) {
-            drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
-        } else {
-            drawScale(radioGetFrequency());
-        }
+        if (rt[0]) drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
+        else       drawScale(radioGetFrequency());
     }
 }

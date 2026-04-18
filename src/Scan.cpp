@@ -137,6 +137,10 @@ bool scanIsActive() {
     return g_status != SCAN_OFF;
 }
 
+bool scanIsDone() {
+    return g_status == SCAN_DONE;
+}
+
 void scanReset() {
     g_status = SCAN_OFF;
 }
