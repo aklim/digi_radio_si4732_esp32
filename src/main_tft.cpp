@@ -13,7 +13,7 @@
 //   Encoder      : A=18, B=19, BTN=5
 //   TFT HSPI     : MOSI=13, SCLK=14, MISO=27, CS=15, DC=2, RST=33
 //   Backlight    : GPIO 4 (LEDC PWM)
-//   Touch CS     : GPIO 17 (XPT2046 — touch support lands in a later commit)
+//   Touch CS     : GPIO 17 (XPT2046 — calibration baked in below)
 //
 // Rendering: partial redraw driven by a per-zone dirty-flags byte. Each zone
 // is repainted independently by clearing its rect to COL_BG and redrawing
@@ -44,6 +44,13 @@ constexpr uint8_t  BL_LEDC_CHANNEL  = 0;
 constexpr uint32_t BL_LEDC_FREQ_HZ  = 5000;
 constexpr uint8_t  BL_LEDC_RES_BITS = 8;
 constexpr uint8_t  BL_DEFAULT_DUTY  = 220;
+
+// Hard-coded XPT2046 calibration — produced once by tft.calibrateTouch() on
+// this specific shield; see src/test_shield.cpp where the same constants
+// have been running reliably since the bring-up. If a replacement shield
+// lands, re-run the calibration phase from test_shield.cpp and paste the
+// new 5 values here.
+static uint16_t TOUCH_CALIBRATION[5] = { 477, 3203, 487, 3356, 6 };
 
 // Firmware identity — same pattern as main.cpp; the `asm volatile` anchor in
 // setup() keeps the symbol alive against --gc-sections. Unlike the OLED,
@@ -94,6 +101,8 @@ static void drawFooter();
 
 static void handleEncoderRotation(long value);
 static void toggleMode();
+static void setMode(AdjustMode newMode);
+static void handleTouch();
 
 // ============================================================================
 // Section 5: setup() / loop()
@@ -109,6 +118,7 @@ void setup() {
 
     initBacklight();
     initDisplay();
+    tft.setTouch(TOUCH_CALIBRATION);
     drawSplash();
 
     // Wait for the Si4732 RC reset circuit to release the chip.
@@ -138,6 +148,7 @@ void loop() {
     if (radioPollRds()) {
         markDirty(DIRTY_RDS);
     }
+    handleTouch();
     updateDisplay();
 }
 
@@ -166,13 +177,44 @@ static void handleEncoderRotation(long value) {
     }
 }
 
-static void toggleMode() {
-    currentMode = (currentMode == MODE_FREQUENCY) ? MODE_VOLUME : MODE_FREQUENCY;
+static void setMode(AdjustMode newMode) {
+    if (newMode == currentMode) return;
+    currentMode = newMode;
     encoderSetBoundsForMode(currentMode, radioGetFrequency(), radioGetVolume());
     // Focus border colour depends on currentMode — repaint both bordered zones.
     markDirty(DIRTY_FREQ | DIRTY_VOL);
     Serial.print(F("Mode: "));
     Serial.println((currentMode == MODE_FREQUENCY) ? F("FREQUENCY") : F("VOLUME"));
+}
+
+static void toggleMode() {
+    setMode(currentMode == MODE_FREQUENCY ? MODE_VOLUME : MODE_FREQUENCY);
+}
+
+// Poll the XPT2046 touch controller and route taps to the matching mode.
+// The library debounces by returning false while the touch is steady; we
+// add a 200 ms lockout anyway to absorb panel noise on the Rev 2.1 resistor
+// ladder. delay(15) after a processed hit mirrors the pattern that has
+// been running in test_shield.cpp since the bring-up.
+static void handleTouch() {
+    static unsigned long lastTouchMs = 0;
+    unsigned long now = millis();
+    if (now - lastTouchMs < TOUCH_DEBOUNCE_MS) return;
+
+    uint16_t tx = 0, ty = 0;
+    if (!tft.getTouch(&tx, &ty)) return;
+
+    lastTouchMs = now;
+
+    if (tx >= TOUCH_FREQ_X && tx < TOUCH_FREQ_X + TOUCH_FREQ_W &&
+        ty >= TOUCH_FREQ_Y && ty < TOUCH_FREQ_Y + TOUCH_FREQ_H) {
+        setMode(MODE_FREQUENCY);
+    } else if (tx >= TOUCH_VOL_X && tx < TOUCH_VOL_X + TOUCH_VOL_W &&
+               ty >= TOUCH_VOL_Y && ty < TOUCH_VOL_Y + TOUCH_VOL_H) {
+        setMode(MODE_VOLUME);
+    }
+
+    delay(15);  // let the resistive panel settle
 }
 
 // ============================================================================
