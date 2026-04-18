@@ -49,6 +49,11 @@ bool drawBattery(int x, int y) {
     if (!g_tft) return false;
     TFT_eSPI &s = *g_tft;
 
+    // Per-widget clear — wipes any previous voltage-text artefact to the
+    // left of the icon. Rect covers "-3.99V" (Font 2 ≈ 6 px/char) plus
+    // the icon itself plus a tiny safety margin.
+    s.fillRect(x - 52, y, 82, 16, TH.bg);
+
     // Outer frame (ATS-Mini uses 28 wide + 1 px contact pip on the right).
     s.drawSmoothRoundRect(x, y + 1, 3, 2, 28, 14, TH.batt_border, TH.bg);
     s.fillRect(x + 28, y + 5, 2, 6, TH.batt_border);
@@ -83,6 +88,11 @@ void drawBandAndMode(const char *band, const char *mode, int x, int y) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
 
+    // Per-widget clear: band tag is TC-anchored at x with up to ~80 px
+    // on each side, mode box extends ~60 px to the right. Combined rect
+    // covers both with slack.
+    s.fillRect(x - 80, y - 1, 220, 30, TH.bg);
+
     s.setFreeFont(&Orbitron_Light_24);
     s.setTextDatum(TC_DATUM);
     s.setTextColor(TH.band_text, TH.bg);
@@ -111,6 +121,12 @@ void drawFrequency(uint32_t freq, int x, int y, int ux, int uy) {
     TFT_eSPI &s = *g_tft;
 
     const Band *band = radioGetCurrentBand();
+
+    // Per-widget clear: Font 7 digit is ~32 px wide, we can have up to
+    // 6 digits + decimal point right-anchored at x=250, so the left edge
+    // reaches ~50. Height ~60 px covers digit (~50) + unit label + AM
+    // fractional tail. Whole rect: (45..320, 35..105).
+    s.fillRect(45, y - 25, 275, 70, TH.bg);
 
     s.setTextDatum(MR_DATUM);
     s.setTextColor(TH.freq_text, TH.bg);
@@ -143,6 +159,16 @@ void drawStationName(const char *name, int x, int y) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
 
+    // Per-widget clear: Font 4 is ~11 px/char; PS is 8 chars max (~90 px
+    // wide), centred on x. Rect 200 px wide, 22 px tall absorbs all PS
+    // lengths including a cleanly blanking paint after sync drops.
+    s.fillRect(x - 100, y, 200, 22, TH.bg);
+
+    // Empty name ⇒ caller already cleared the zone (via the fillRect
+    // above) and we are done. This lets Layout-Default call us every
+    // frame unconditionally so sync drops wipe the old PS cleanly.
+    if (!name || !name[0]) return;
+
     s.setTextDatum(TC_DATUM);
     s.setTextColor(TH.rds_text, TH.bg);
     s.drawString(name, x, y, 4);
@@ -160,6 +186,11 @@ void drawStationName(const char *name, int x, int y) {
 void drawSMeter(int strength, int x, int y) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
+
+    // Per-widget clear: fills the whole 49-segment strip with the empty
+    // colour so bars that were lit last frame but are dark this frame
+    // drop out cleanly. Icon + line overlay immediately afterwards.
+    s.fillRect(x, y, 15 + 49 * 4, 16, TH.bg);
 
     s.drawTriangle(x + 1, y + 1, x + 11, y + 1, x + 6, y + 6, TH.smeter_icon);
     s.drawLine(x + 6, y + 1, x + 6, y + 14, TH.smeter_icon);
@@ -196,6 +227,11 @@ void drawStereoIndicator(int x, int y, bool stereo) {
 void drawRadioText(int y, int ymax) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
+
+    // Per-widget clear: RT can be up to ~40 chars wide in Font 2
+    // (~6 px/char); clear a full-width strip so old pixels never linger
+    // when the RT shrinks or clears.
+    s.fillRect(0, y, 320, ymax - y, TH.bg);
 
     char rt[65];
     radioGetRdsRt(rt, sizeof(rt));

@@ -82,13 +82,12 @@ void drawLayoutDefault() {
                   FREQ_OFFSET_X, FREQ_OFFSET_Y,
                   FUNIT_OFFSET_X, FUNIT_OFFSET_Y);
 
-    // RDS station name (PS). Upstream has a separate long-name path for
-    // the EIBI database; we only ever have the 8-char PS string.
+    // RDS station name (PS). Always call so the draw function's
+    // per-widget clear runs even when PS is empty — that way a sync
+    // drop paints the zone blank instead of leaving the old name.
     char ps[9];
     radioGetRdsPs(ps, sizeof(ps));
-    if (ps[0]) {
-        drawStationName(ps, RDS_OFFSET_X, RDS_OFFSET_Y);
-    }
+    drawStationName(ps, RDS_OFFSET_X, RDS_OFFSET_Y);
 
     // S-meter (top edge) + stereo pilot split.
     int strength = strengthFromRssi(radioGetRssi());
@@ -96,12 +95,8 @@ void drawLayoutDefault() {
     drawStereoIndicator(METER_OFFSET_X, METER_OFFSET_Y,
                         (band->mode == MODE_FM) && radioIsStereo());
 
-    // Bottom status row: RadioText if we have any, otherwise the band
-    // scale (Step 5) will claim this space. For now just draw RT when
-    // present and leave the scale slot blank.
-    char rt[65];
-    radioGetRdsRt(rt, sizeof(rt));
-    if (rt[0]) {
-        drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
-    }
+    // Bottom status row: drawRadioText handles its own per-widget clear
+    // and no-op-when-empty, so it runs every frame regardless. The band
+    // scale (Step 5) will claim this slot when RT is absent.
+    drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
 }
