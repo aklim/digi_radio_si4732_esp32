@@ -71,9 +71,14 @@ constexpr uint16_t COL_STEREO_OFF  = TFT_DARKGREY;
 constexpr uint16_t COL_VERSION     = TFT_YELLOW;
 
 // --- Fonts (TFT_eSPI built-ins loaded via User_Setup.h) --------------------
-// FONT7 = 7-segment style, numeric + '.' only — perfect for the frequency.
-// FONT4 = 26 px sans — labels, volume number, SNR number.
-// FONT2 = 16 px sans — footer, RDS RadioText body.
+// Legacy bitmap-font aliases, kept as fallbacks during the FreeFonts
+// rollout. main_tft.cpp now routes every drawString() through the
+// Adafruit-GFX free fonts (FSSB12, FSS9, FSSB9, FMB24) declared near the
+// draw functions — these constants are retained for any code that still
+// needs a bitmap-font identifier and for quick A/B comparison.
+//   FONT7 = 7-segment style, numeric + '.' only.
+//   FONT4 = 26 px sans — labels, volume number, SNR number.
+//   FONT2 = 16 px sans — footer, RDS RadioText body.
 constexpr uint8_t FONT_BIG   = 7;
 constexpr uint8_t FONT_LABEL = 4;
 constexpr uint8_t FONT_SMALL = 2;
@@ -101,18 +106,51 @@ constexpr int16_t RDS_RT_Y   = RDS_Y + 38;   // FONT2, truncated to screen width
 constexpr uint8_t RDS_RT_MAX_CHARS = 38;     // FONT2 fits ~38 chars at 240 px
 
 // --- S-meter zone ----------------------------------------------------------
+// The first row of the meter zone now hosts an analog needle gauge rendered
+// through a TFT_eSprite (see main_tft.cpp, section "Needle S-meter"). The
+// numeric dBuV value and the SNR row on the right are unchanged.
+//
+// Legacy METER_BAR_* constants are retained so a rollback to the flat bar
+// needs nothing but un-calling drawNeedleGauge() and restoring the fillRect
+// block. Delete them once the needle has been in master for a release.
 constexpr int16_t METER_LABEL_X = 4;
-constexpr int16_t METER_BAR_X   = 52;
-constexpr int16_t METER_BAR_Y   = METER_Y + 6;
-constexpr int16_t METER_BAR_W   = 150;
-constexpr int16_t METER_BAR_H   = 14;
+constexpr int16_t METER_BAR_X   = 52;           // legacy — bar rollback only
+constexpr int16_t METER_BAR_Y   = METER_Y + 6;  // legacy
+constexpr int16_t METER_BAR_W   = 150;          // legacy
+constexpr int16_t METER_BAR_H   = 14;           // legacy
 constexpr int16_t METER_VAL_X   = METER_BAR_X + METER_BAR_W + 4;
-constexpr int16_t METER_VAL_Y   = METER_BAR_Y - 1;
-constexpr int16_t METER_ROW2_Y  = METER_Y + 28;     // "SNR xx dB    stereo o"
+constexpr int16_t METER_VAL_Y   = METER_BAR_Y + 2;  // nudge for FSSB9 baseline
+constexpr int16_t METER_ROW2_Y  = METER_Y + 34;     // "SNR xx dB    stereo o"
 constexpr int16_t STEREO_DOT_X  = 220;
 constexpr int16_t STEREO_DOT_Y  = METER_ROW2_Y + 6;
 constexpr int16_t STEREO_DOT_R  = 5;
-constexpr uint8_t RSSI_SCALE_MAX_DBUV = 60;   // visible-bar range
+constexpr uint8_t RSSI_SCALE_MAX_DBUV = 60;   // visible-scale upper bound
+
+// --- Needle S-meter gauge --------------------------------------------------
+// Sprite-backed analog gauge living in the left portion of the meter zone.
+// Pivot is below the visible strip so only the top fan of a larger dial is
+// drawn — classic vintage S-meter silhouette at 48 px tall.
+//
+// Geometry is in sprite-local coordinates; the sprite itself is pushed to
+// (GAUGE_X, GAUGE_Y) on the TFT.
+constexpr int16_t GAUGE_X      = 42;           // top-left X of sprite on TFT
+constexpr int16_t GAUGE_Y      = METER_Y + 2;  // top-left Y of sprite on TFT
+constexpr int16_t GAUGE_W      = 156;          // sprite width  (px)
+constexpr int16_t GAUGE_H      = 44;           // sprite height (px)
+constexpr int16_t GAUGE_PIVOT_X = GAUGE_W / 2; // needle pivot, sprite-local
+constexpr int16_t GAUGE_PIVOT_Y = GAUGE_H + 14;// pivot below visible area
+constexpr int16_t GAUGE_R_OUTER = 54;          // needle length (px)
+constexpr int16_t GAUGE_R_INNER = 46;          // start of tick marks
+constexpr int16_t GAUGE_R_TICK  = 52;          // end of tick marks
+constexpr int16_t GAUGE_SWEEP_DEG = 60;        // half-sweep either side of up
+
+constexpr uint16_t COL_GAUGE_BG    = TFT_BLACK;
+constexpr uint16_t COL_GAUGE_ARC   = TFT_DARKGREY;
+constexpr uint16_t COL_GAUGE_TICK  = TFT_WHITE;
+constexpr uint16_t COL_GAUGE_LABEL = TFT_LIGHTGREY;
+constexpr uint16_t COL_NEEDLE_LOW  = TFT_GREEN;
+constexpr uint16_t COL_NEEDLE_MID  = TFT_YELLOW;
+constexpr uint16_t COL_NEEDLE_HIGH = TFT_RED;
 
 // --- Volume zone -----------------------------------------------------------
 constexpr int16_t VOL_LABEL_X = 4;
