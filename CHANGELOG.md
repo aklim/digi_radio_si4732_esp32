@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+- TFT variant: analog needle S-meter. The flat RSSI bar is replaced by a
+  sprite-backed arc gauge with tick marks at every 10 dBµV and a
+  green→yellow→red needle that animates smoothly (EMA-smoothed,
+  ~30 Hz redraw) between RSSI samples. Dial chrome renders through a
+  `TFT_eSprite` to stay flicker-free. Only affects `esp32dev_tft`.
+- TFT variant: Adafruit-GFX FreeFonts throughout the UI
+  (`FreeSansBold24pt7b` for the frequency readout, `FreeSansBold12pt7b`
+  for section headers, `FreeSans9pt7b` / `FreeSansBold9pt7b` for labels
+  and numeric values). Replaces the legacy bitmap fonts (FONT2/4/7).
+  Enabled via `LOAD_GFXFF` in `include/User_Setup.h`.
+
+### Notes
+- The new frequency font is anti-aliased but smaller than the legacy
+  7-segment FONT7. If the bigger 7-seg look is missed, a follow-up can
+  vendor the open-source `DSEG7_Classic_Bold_48` GFX font under
+  `include/fonts/` and swap the `FREQ_FONT` constant in `src/main_tft.cpp`
+  — no other changes needed.
+- First step on the road to [ATS-Mini](https://atsmini.github.io/)
+  feature/UI parity. See [docs/future_improvements.md](docs/future_improvements.md)
+  for the remaining roadmap (menu system, AM/SW/LW bands, SSB, memory
+  presets, waterfall, themes, …).
+
 ## [1.1.0] - 2026-04-18
 
 ### Added

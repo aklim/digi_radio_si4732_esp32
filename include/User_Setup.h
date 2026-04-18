@@ -72,11 +72,16 @@
 #define SPI_TOUCH_FREQUENCY  2500000
 
 // --- Fonts ------------------------------------------------------------------
+// Legacy bitmap fonts (FONT2/4/6/7) stay enabled as fallbacks during the
+// FreeFonts rollout. LOAD_GFXFF enables TFT_eSPI's Adafruit-GFX-format free
+// fonts (FreeSans, FreeSansBold, FreeMono, FreeSerif, ...) that the TFT UI
+// now uses for all labels and the frequency display.
 #define LOAD_GLCD
 #define LOAD_FONT2
 #define LOAD_FONT4
 #define LOAD_FONT6
 #define LOAD_FONT7
+#define LOAD_GFXFF
 #define SMOOTH_FONT
 
 #endif  // USER_SETUP_H

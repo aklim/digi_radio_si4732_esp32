@@ -71,31 +71,38 @@ Portrait, 240×320, rotation 0. Coordinates and color/font choices are
 | FM  STEREO                     v1.x  |  header  (h=28, bg NAVY)
 +--------------------------------------+  y=32
 |                                      |
-|        1 0 2 . 4       MHz           |  freq zone (h=108, FONT7)
+|         1 0 2 . 4   MHz              |  freq zone (h=108, FSSB24)
 |                                      |
 +--------------------------------------+  y=140
 | PS: RadioXYZ                         |
 | lorem ipsum dolor sit amet...        |  RDS zone  (h=68)
 +--------------------------------------+  y=208
-| RSSI  [################-----] 48 dB  |
-| SNR  15 dB                stereo ●   |  meter zone (h=48)
+| RSSI   ◡◜ ◝◠◞ ◠◟◠ ◝◠◞ ◠◜◝◠◞   48 dB |
+| SNR  15 dB                stereo ●   |  meter zone (h=48, needle gauge)
 +--------------------------------------+  y=256
 | Vol   [########-----------] 30       |  volume zone (h=48)
 +--------------------------------------+  y=304
-| v1.x.y  USB  102.4 MHz               |  footer (h=16, FONT2)
+| v1.x.y  USB  102.4 MHz               |  footer (h=16, FSS9)
 +--------------------------------------+  y=320
 ```
 
 ### Fonts
 
-All three fonts come from TFT_eSPI itself (built in via `User_Setup.h`) —
-no FreeFonts pack in v1.
+All typography renders through TFT_eSPI's Adafruit-GFX free fonts
+(built in when `LOAD_GFXFF` is defined in `include/User_Setup.h`). No
+vendored font headers — the linker drops any free font that is not
+actually referenced, so the Flash cost is bounded to the 4 faces below.
 
-| Constant      | Font # | Use                             |
-|---------------|--------|---------------------------------|
-| `FONT_BIG`    | 7      | Frequency (7-segment, numeric)  |
-| `FONT_LABEL`  | 4      | Labels, volume & SNR numbers    |
-| `FONT_SMALL`  | 2      | Footer, RDS RadioText body      |
+| Constant       | Free font                | Use                               |
+|----------------|--------------------------|-----------------------------------|
+| `FREQ_FONT`    | `FreeSansBold24pt7b`     | Frequency digits + MHz label      |
+| `HEADER_FONT`  | `FreeSansBold12pt7b`     | "FM", STEREO / MONO, "Vol", "PS:" |
+| `LABEL_FONT`   | `FreeSans9pt7b`          | RSSI / SNR labels, footer, RDS RT |
+| `VALUE_FONT`   | `FreeSansBold9pt7b`      | Numeric dBµV next to meter label  |
+
+Legacy bitmap-font aliases (`FONT_BIG=7`, `FONT_LABEL=4`, `FONT_SMALL=2`)
+are still defined in `include/ui_layout_tft.h` as fallbacks and will be
+removed once the GFX rollout has been in master for a release.
 
 ### Focus border
 
@@ -105,13 +112,27 @@ a dim grey border. Toggling mode repaints only those two borders.
 
 ### S-meter
 
-RSSI (0..127 dBµV from `radio.getCurrentRSSI()`) is clamped to the 0..60 dBµV
-range and mapped to a 150-pixel bar. Tick marks sit every 10 dBµV above the
-bar so the scale is readable at a glance. The numeric dBµV value is printed
-to the right of the bar.
+RSSI (0..127 dBµV from `radio.getCurrentRSSI()`) is clamped to the
+0..60 dBµV range and painted as an analog needle gauge in the left
+portion of the meter zone. Geometry comes from `GAUGE_*` constants in
+`include/ui_layout_tft.h`: the pivot lives below the visible sprite so
+only the top fan of an imaginary larger dial shows, giving the classic
+moving-coil silhouette. Tick marks sit at every 10 dBµV along the arc;
+the needle is green below 20 dBµV, yellow up to 45, and red above that.
 
-The stereo dot (green when `radio.getCurrentPilot()` is true, dim grey
-otherwise) is mirrored in the header "STEREO / MONO" label.
+The gauge is rendered through a `TFT_eSprite` (`GAUGE_W × GAUGE_H`
+pixels) and pushed in one blit so the needle moves without flicker.
+Between radio polls the needle is interpolated client-side by
+`pumpNeedleAnimation()` in [src/main_tft.cpp](../src/main_tft.cpp), which
+runs an EMA on `radioGetRssi()` every `NEEDLE_ANIM_MS` (30 ms) and
+repaints only when the smoothed value has moved more than
+`NEEDLE_EPSILON`. Once the needle settles the gauge is idle — zero CPU
+cost at rest.
+
+The numeric dBµV value stays on the right side of the zone; SNR and
+stereo dot sit on the second row, unchanged. The stereo dot (green when
+`radio.getCurrentPilot()` is true, dim grey otherwise) is mirrored in
+the header "STEREO / MONO" label.
 
 ## Input
 
@@ -158,7 +179,8 @@ cleared immediately — the gating on `getRdsSync()` stops the library's
 stale bytes from being copied over until the new station locks in.
 
 RadioText scrolling is not implemented; the UI truncates RT to the 38
-characters that fit on one line of FONT2. See
+characters that fit on one line at the current label font
+(`FreeSans9pt7b`). See
 [future_improvements.md](future_improvements.md) for the marquee plan.
 
 ## Rendering pipeline
@@ -182,10 +204,14 @@ The benchmark numbers from [display_shield_test.md](display_shield_test.md)
 (1.83 µs/drawString, 46 ms polled full-fill) comfortably fit the 2-5 Hz
 update rate we actually trigger.
 
-Sprites are not used in v1 — `fillRect` + `drawString` is fast enough and
-far simpler. If future zones (waterfall, RT marquee) introduce visible
-flicker, migrating the FREQ zone to a `TFT_eSprite` with DMA push is the
-follow-up; the pattern is already proven in `test_shield.cpp` phase 5/6.
+Only the S-meter needle gauge renders through a `TFT_eSprite` — the
+animated needle would otherwise flicker between its previous and new
+positions. All other zones still use direct `fillRect` + `drawString`
+because their update cadence (≤10 Hz) is slow enough not to flicker on
+direct draws. Migrating the FREQ zone (and eventually all zones) to a
+full sprite+DMA pipeline is tracked in
+[future_improvements.md](future_improvements.md); the pattern is proven
+in `test_shield.cpp` phase 5/6.
 
 ## Verification checklist
 
@@ -201,7 +227,9 @@ Flash the firmware, open the serial monitor, and confirm:
    RadioText within ~10 s.
 6. Tune an empty frequency → PS/RT clear within 10 s, UI shows `PS: --`.
 7. Stereo dot flips green / dim-grey as the pilot bit comes and goes.
-8. RSSI bar and SNR number track the live signal.
+8. RSSI needle and SNR number track the live signal — the needle should
+   animate smoothly (not snap) between RSSI samples, with green→yellow→red
+   colour grading as the signal rises.
 9. Version string (top-right of header, left of footer) matches
    `git describe --tags --dirty` and `strings firmware.elf | grep FW=`.
 
