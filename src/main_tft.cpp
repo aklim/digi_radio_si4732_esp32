@@ -204,6 +204,15 @@ static void handleTouch() {
     uint16_t tx = 0, ty = 0;
     if (!tft.getTouch(&tx, &ty)) return;
 
+    // TFT_eSPI's getTouch applies the stored calibration but does not rotate
+    // the result. Our calibration was captured in rotation 0, so when the
+    // panel is flipped (rotation 2) the raw touch landing at visual (x, y)
+    // comes back as (W-1-x, H-1-y) — mirror it here to match the drawn UI.
+    if (DISPLAY_FLIPPED) {
+        tx = SCREEN_W - 1 - tx;
+        ty = SCREEN_H - 1 - ty;
+    }
+
     lastTouchMs = now;
 
     if (tx >= TOUCH_FREQ_X && tx < TOUCH_FREQ_X + TOUCH_FREQ_W &&
@@ -229,7 +238,10 @@ static void initBacklight() {
 
 static void initDisplay() {
     tft.init();
-    tft.setRotation(0);       // portrait 240x320
+    // Rotation 0 = portrait right-side-up; rotation 2 = portrait upside-down
+    // for shields mounted in a case that can't be physically flipped. See
+    // DISPLAY_FLIPPED in ui_layout_tft.h — flip the flag to switch.
+    tft.setRotation(DISPLAY_FLIPPED ? 2 : 0);
     tft.fillScreen(COL_BG);
 }
 

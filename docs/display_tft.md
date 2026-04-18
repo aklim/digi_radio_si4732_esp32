@@ -25,6 +25,17 @@ On first boot the splash screen shows the firmware version (from
 constants are pinned from the values that `tft.calibrateTouch()` produced
 during the shield bring-up.
 
+### Physical orientation
+
+`DISPLAY_FLIPPED` in [include/ui_layout_tft.h](../include/ui_layout_tft.h)
+chooses the panel orientation. `true` rotates the UI 180° (useful when the
+shield is mounted in a case that cannot be turned over); `false` is
+right-side-up portrait. Defaults to `true` for the current enclosure. When
+the flag is `true`, `main_tft.cpp` also mirrors touch coordinates
+(`x → W-1-x`, `y → H-1-y`) so finger taps still hit the visually-correct
+zone — the pinned touch calibration was captured in rotation 0 and
+TFT_eSPI's `getTouch()` does not compensate for rotation on its own.
+
 ## Pin map
 
 All pins are orthogonal to the OLED firmware; the two variants share the

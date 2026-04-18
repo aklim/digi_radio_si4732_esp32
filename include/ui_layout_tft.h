@@ -33,6 +33,19 @@
 constexpr int16_t SCREEN_W = 240;
 constexpr int16_t SCREEN_H = 320;
 
+// --- Physical orientation --------------------------------------------------
+// When DISPLAY_FLIPPED is true the UI is drawn upside-down (portrait 180),
+// useful when the shield is mounted in a case that cannot be rotated. Set
+// to false when the shield is mounted right-side-up.
+//
+// Touch consequence: the hard-coded XPT2046 calibration in main_tft.cpp was
+// captured with the panel in rotation 0, and TFT_eSPI's getTouch() does NOT
+// rotate coordinates on its own — it just applies the stored calibration.
+// main_tft.cpp's handleTouch() therefore manually mirrors the touch point
+// (x -> W-1-x, y -> H-1-y) when this flag is true so finger taps still land
+// on the visually-correct zone. If taps ever feel inverted, toggle this.
+constexpr bool DISPLAY_FLIPPED = true;
+
 // --- Zones (y/height) ------------------------------------------------------
 constexpr int16_t HEADER_Y = 0,   HEADER_H = 28;
 constexpr int16_t FREQ_Y   = 32,  FREQ_H   = 108;
