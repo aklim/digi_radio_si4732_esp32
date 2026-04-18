@@ -30,21 +30,17 @@
 #include <TFT_eSPI.h>   // for TFT_* color macros
 
 // --- Panel -----------------------------------------------------------------
-constexpr int16_t SCREEN_W = 240;
-constexpr int16_t SCREEN_H = 320;
+// Landscape orientation (rotation 3). Native panel is 240×320 portrait; the
+// driver reports 320×240 after rotate. This mirrors the ATS-Mini UI which
+// assumes a landscape canvas for its sidebar + big frequency layout.
+constexpr int16_t SCREEN_W = 320;
+constexpr int16_t SCREEN_H = 240;
 
-// --- Physical orientation --------------------------------------------------
-// When DISPLAY_FLIPPED is true the UI is drawn upside-down (portrait 180),
-// useful when the shield is mounted in a case that cannot be rotated. Set
-// to false when the shield is mounted right-side-up.
-//
-// Touch consequence: the hard-coded XPT2046 calibration in main.cpp was
-// captured with the panel in rotation 0, and TFT_eSPI's getTouch() does NOT
-// rotate coordinates on its own — it just applies the stored calibration.
-// main.cpp's handleTouch() therefore manually mirrors the touch point
-// (x -> W-1-x, y -> H-1-y) when this flag is true so finger taps still land
-// on the visually-correct zone. If taps ever feel inverted, toggle this.
-constexpr bool DISPLAY_FLIPPED = true;
+// Native (rotation-0) panel dimensions — needed by the touch transform
+// because TFT_eSPI's XPT2046 calibration was captured in rotation 0 and
+// getTouch() does not re-rotate on its own.
+constexpr int16_t PANEL_W_NATIVE = 240;
+constexpr int16_t PANEL_H_NATIVE = 320;
 
 // --- Zones (y/height) ------------------------------------------------------
 constexpr int16_t HEADER_Y = 0,   HEADER_H = 28;

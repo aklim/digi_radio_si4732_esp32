@@ -344,14 +344,15 @@ static void handleTouch() {
     uint16_t tx = 0, ty = 0;
     if (!tft.getTouch(&tx, &ty)) return;
 
-    // TFT_eSPI's getTouch applies the stored calibration but does not rotate
-    // the result. Our calibration was captured in rotation 0, so when the
-    // panel is flipped (rotation 2) the raw touch landing at visual (x, y)
-    // comes back as (W-1-x, H-1-y) — mirror it here to match the drawn UI.
-    if (DISPLAY_FLIPPED) {
-        tx = SCREEN_W - 1 - tx;
-        ty = SCREEN_H - 1 - ty;
-    }
+    // TFT_eSPI's getTouch applies the stored calibration but does not
+    // rotate the result. Our calibration was captured in rotation 0
+    // (native 240×320 portrait). We now run in rotation 3 (landscape
+    // 320×240) so transform the returned rotation-0 coords into the
+    // display's current logical frame:
+    //   (x_disp, y_disp) = (y_raw, PANEL_W_NATIVE - 1 - x_raw)
+    uint16_t rawX = tx, rawY = ty;
+    tx = rawY;
+    ty = PANEL_W_NATIVE - 1 - rawX;
 
     lastTouchMs = now;
 
@@ -378,10 +379,10 @@ static void initBacklight() {
 
 static void initDisplay() {
     tft.init();
-    // Rotation 0 = portrait right-side-up; rotation 2 = portrait upside-down
-    // for shields mounted in a case that can't be physically flipped. See
-    // DISPLAY_FLIPPED in ui_layout.h — flip the flag to switch.
-    tft.setRotation(DISPLAY_FLIPPED ? 2 : 0);
+    // Rotation 3 = landscape (320×240). Matches ATS-Mini's assumed canvas
+    // and is the only rotation this firmware supports from here on — the
+    // previous DISPLAY_FLIPPED knob retires.
+    tft.setRotation(3);
     tft.fillScreen(COL_BG);
 }
 
