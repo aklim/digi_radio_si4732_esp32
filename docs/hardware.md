@@ -61,3 +61,30 @@ at runtime — only a full power cycle will reset it.
 - **Dual-color panel:** top 16 rows are yellow, bottom 48 rows are blue.
   This is a hardware characteristic of the panel, not software-controlled.
 - The Adafruit SSD1306 library works unchanged with SSD1315 panels.
+
+## TFT Variant (alternative)
+
+The `esp32dev_tft` firmware drives a Waveshare 2.8" TFT Touch Shield Rev 2.1
+(ST7789V 240×320 + XPT2046 resistive touch) stacked on the same ESP32
+DevKit. The OLED is not connected in this configuration; everything else
+on the board (Si4732, encoder, power) is unchanged. The TFT shield uses
+HSPI pins that do not overlap the I²C / encoder pins used by the OLED
+firmware, so both variants can target the same wired board.
+
+| Signal      | ESP32 GPIO | Note                                |
+|-------------|------------|-------------------------------------|
+| TFT MOSI    | 13         | HSPI IOMUX (direct-connect)         |
+| TFT SCLK    | 14         | HSPI IOMUX                          |
+| TFT MISO    | 27         | Shared with XPT2046 read path       |
+| TFT CS      | 15         | HSPI                                |
+| TFT DC      |  2         |                                     |
+| TFT RST     | 33         |                                     |
+| TFT BL      |  4         | LEDC PWM backlight                  |
+| Touch CS    | 17         | XPT2046                             |
+
+Driver configuration (ST7789V, BGR, inversion on, HSPI, 27 MHz) is in
+[include/User_Setup.h](../include/User_Setup.h). UI layout and touch zones
+are in [display_tft.md](display_tft.md).
+
+The shield's SB1/SB2/SB3 solder jumpers must be bridged; the shield is
+powered from the ESP32's 5V / VIN rail with a shared GND.

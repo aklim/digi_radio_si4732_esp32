@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+- `esp32dev_tft` firmware variant driving the Waveshare 2.8" ST7789V TFT
+  shield: 240×320 colour UI with large frequency, S-meter (0–60 dBµV
+  with tick marks), RDS PS and RadioText, stereo pilot indicator, SNR,
+  firmware-version footer, and a yellow focus border around the active
+  zone. XPT2046 touch zones switch between frequency and volume
+  adjustment as an alternative to the encoder button. See
+  [docs/display_tft.md](docs/display_tft.md).
+- Shared `radio.cpp` / `input.cpp` modules reused by both the OLED and
+  TFT firmwares — the two mains differ only in the display backend and
+  the UI layout.
+- [docs/future_improvements.md](docs/future_improvements.md) — living
+  roadmap of v2+ ideas.
+
+### Changed
+- Release workflow now publishes both `digi_radio-vX.Y.Z-esp32dev.{bin,elf}`
+  and `digi_radio-vX.Y.Z-esp32dev_tft.{bin,elf}` per tag.
+- `src/main.cpp` refactored to consume the shared radio / input modules
+  (no behaviour change — same splash, same FREQ/VOL toggle, same RSSI bar).
+- `platformio.ini` hoists shared settings into a `[common]` section and
+  uses explicit `build_src_filter` per env so shared sources never leak
+  between builds.
+
 ## [1.0.0] - 2026-04-18
 
 ### Added
