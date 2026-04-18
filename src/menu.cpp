@@ -1,10 +1,11 @@
 // ============================================================================
 // menu.cpp — full-screen modal menu for the TFT firmware.
 //
-// Two navigation states at the moment:
+// Three navigation states at the moment:
 //
-//   MENU_TOP       top-level list (Band, Close)
+//   MENU_TOP       top-level list (Band, Theme, Close)
 //       ├── click "Band"  → MENU_BAND
+//       ├── click "Theme" → MENU_THEME
 //       └── click "Close" → close menu
 //
 //   MENU_BAND      pick a band (one row per entry in radio.h g_bands[]
@@ -12,6 +13,11 @@
 //                  switching bands)
 //       ├── click a band row → radioSetBand(idx) + close menu
 //       └── click "Back"     → MENU_TOP
+//
+//   MENU_THEME     pick a palette (one row per entry in Themes.cpp
+//                  catalogue + a trailing "Back" row)
+//       ├── click a theme row → themeIdx = i + persist + close menu
+//       └── click "Back"      → MENU_TOP
 //
 // Rendering model: every time menuTakeDirty() returns true, main.cpp
 // calls menuDraw(tft) which repaints the whole screen. No per-row partial
@@ -36,6 +42,8 @@
 #include "persist.h"
 #include "input.h"
 #include "ui_layout.h"
+#include "Themes.h"
+#include "Scan.h"
 
 namespace {
 
@@ -43,6 +51,7 @@ enum MenuState : uint8_t {
     MENU_STATE_CLOSED,
     MENU_STATE_TOP,
     MENU_STATE_BAND,
+    MENU_STATE_THEME,
 };
 
 MenuState g_state   = MENU_STATE_CLOSED;
@@ -56,6 +65,8 @@ bool      g_dirty   = false;
 struct TopItem { const char* label; MenuCmd cmd; };
 constexpr TopItem TOP_ITEMS[] = {
     { "Band",  CMD_BAND  },
+    { "Theme", CMD_THEME },
+    { "Scan",  CMD_SCAN  },
     { "Close", CMD_CLOSE },
 };
 constexpr int TOP_COUNT = sizeof(TOP_ITEMS) / sizeof(TOP_ITEMS[0]);
@@ -66,6 +77,11 @@ constexpr int TOP_COUNT = sizeof(TOP_ITEMS) / sizeof(TOP_ITEMS[0]);
 // at index == g_bandCount (rendered as a dim "Back" label).
 int bandItemCount() { return (int)g_bandCount + 1; }
 bool  bandItemIsBack(int idx) { return idx >= (int)g_bandCount; }
+
+// --- Theme-picker items ----------------------------------------------------
+// One row per entry in Themes.cpp + a trailing "Back" row.
+int themeItemCount() { return getTotalThemes() + 1; }
+bool themeItemIsBack(int idx) { return idx >= getTotalThemes(); }
 
 // --- Layout constants (kept local since ui_layout.h is zone-focused) ---
 constexpr int MENU_ROW_H      = 30;
@@ -79,9 +95,10 @@ constexpr int MENU_HINT_Y     = SCREEN_H - 18;
 
 int currentItemCount() {
     switch (g_state) {
-        case MENU_STATE_TOP:  return TOP_COUNT;
-        case MENU_STATE_BAND: return bandItemCount();
-        default:              return 0;
+        case MENU_STATE_TOP:   return TOP_COUNT;
+        case MENU_STATE_BAND:  return bandItemCount();
+        case MENU_STATE_THEME: return themeItemCount();
+        default:               return 0;
     }
 }
 
@@ -182,6 +199,28 @@ void drawBandMenu(TFT_eSPI& tft) {
     drawHint(tft, "* = current band");
 }
 
+void drawThemeMenu(TFT_eSPI& tft) {
+    drawTitle(tft, "Theme");
+    int y       = MENU_LIST_Y;
+    uint8_t cur = themeIdx;
+    int n       = themeItemCount();
+
+    for (int i = 0; i < n; i++) {
+        bool highlighted = (i == g_cursor);
+        if (themeItemIsBack(i)) {
+            drawRow(tft, y, "< Back", highlighted, /*dim=*/!highlighted);
+        } else {
+            drawRow(tft, y, theme[i].name, highlighted);
+            if (i == cur) drawActiveMarker(tft, y, highlighted);
+        }
+        y += MENU_ROW_H + 2;
+    }
+    if (y < MENU_HINT_Y - 8) {
+        tft.fillRect(0, y, SCREEN_W, MENU_HINT_Y - 8 - y, COL_BG);
+    }
+    drawHint(tft, "* = active theme");
+}
+
 }  // namespace
 
 // ============================================================================
@@ -220,6 +259,19 @@ void menuHandleClick() {
                 g_cursor = radioGetBandIdx();
                 g_dirty  = true;
                 return;
+            case CMD_THEME:
+                transitionTo(MENU_STATE_THEME);
+                g_cursor = themeIdx;
+                g_dirty  = true;
+                return;
+            case CMD_SCAN: {
+                // Sweep SCAN_POINTS samples centred on the current tune.
+                // Step granularity comes from the band's natural step.
+                const Band *band = radioGetCurrentBand();
+                scanStart(radioGetFrequency(), band->step);
+                menuClose();
+                return;
+            }
             case CMD_CLOSE:
                 menuClose();
                 return;
@@ -243,6 +295,21 @@ void menuHandleClick() {
         menuClose();
         return;
     }
+
+    if (g_state == MENU_STATE_THEME) {
+        if (themeItemIsBack(g_cursor)) {
+            transitionTo(MENU_STATE_TOP);
+            return;
+        }
+        uint8_t idx = (uint8_t)g_cursor;
+        themeIdx = idx;
+        persistSaveTheme(idx);
+        // menuClose() eventually triggers handleMenuClose() in main.cpp
+        // which forces DIRTY_ALL — that repaint makes the new palette
+        // visible in every zone that already consults TH.
+        menuClose();
+        return;
+    }
 }
 
 bool menuTakeDirty() {
@@ -258,8 +325,9 @@ void menuDraw(TFT_eSPI& tft) {
     tft.fillScreen(COL_BG);
 
     switch (g_state) {
-        case MENU_STATE_TOP:  drawTopMenu(tft);  break;
-        case MENU_STATE_BAND: drawBandMenu(tft); break;
+        case MENU_STATE_TOP:   drawTopMenu(tft);   break;
+        case MENU_STATE_BAND:  drawBandMenu(tft);  break;
+        case MENU_STATE_THEME: drawThemeMenu(tft); break;
         default: break;
     }
 }

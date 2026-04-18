@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Changed
+
+- **UI is now a 1:1 port of [ATS-Mini](https://github.com/esp32-si4732/ats-mini).**
+  The panel runs in landscape (`setRotation(3)` → 320×240) and the widget
+  layout, fonts, and colour-theme struct mirror upstream. New files:
+  `Draw.{h,cpp}`, `Layout-Default.cpp`, `Scan.{h,cpp}`, `Themes.{h,cpp}`,
+  `Battery.{h,cpp}` — each corresponds directly to an `ats-mini/*` file of
+  the same name. See [docs/display_tft.md](docs/display_tft.md).
+- **Fonts:** big frequency now renders in TFT_eSPI Font 7 (7-segment
+  digital-clock face, the same one ATS-Mini calls via `drawFloat(..., 7)`);
+  band tag + mode box use Orbitron_Light_24.
+- **Themes:** the legacy `COL_*` constants retire; 9 ATS-Mini presets
+  (Default / Bluesky / eInk / Pager / Orange / Night / Phosphor / Space /
+  Magenta) selectable from the `Theme` menu entry and persisted across reboots.
+- **Sidebar:** rounded info box at (0, 18) with live Step / BW / AGC /
+  Vol / PI and a placeholder Time row.
+- **Signal stack:** top-edge segmented S-meter with stereo indicator slit
+  replaces the previous needle gauge; band scale with tick marks occupies
+  the bottom zone.
+
+### Added
+
+- **Bandscope sweep (`Scan` menu entry).** Silences audio, sweeps 200
+  frequency points around the current tune, and plots RSSI (green) and
+  SNR (yellow) lines over a dotted grid. Matches ATS-Mini's CMD_SCAN
+  behaviour byte-for-byte; click or long-press to abort and return to
+  the listener's original frequency.
+- **Radio API:** `radioGetRdsPi`, `radioGet/SetBandwidthIdx`,
+  `radioGet/SetAgcAttIdx`, plus low-level `radioScanEnter` /
+  `radioScanMeasure` / `radioScanExit` hooks for Scan.cpp. Core-0 polling
+  task silences itself while a sweep is active.
+- **Persist schema v2**: adds a `theme` slot. v1 stores lazy-upgrade in
+  place (band / volume / per-band freq preserved).
+
+### Fixed
+
+- Full-screen UI repaints no longer flicker: renders go through an 8-bit
+  full-screen `TFT_eSprite` (76 KB heap) with atomic `pushSprite`, same
+  pattern ATS-Mini uses for its 16-bit 320×170 buffer.
+
 ## [2.0.0] - 2026-04-18
 
 Release marking the architectural rewrite of the firmware: the 128×64

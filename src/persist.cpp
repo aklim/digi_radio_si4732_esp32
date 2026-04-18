@@ -21,6 +21,7 @@
 //   band          u8    current band index
 //   vol           u8    volume 0..MAX_VOLUME
 //   freq<N>       u16   per-band last-tuned frequency (N = bandIdx, 0..15)
+//   theme         u8    active UI theme index (v2+)
 // ============================================================================
 
 #include "persist.h"
@@ -42,14 +43,17 @@ bool        g_opened = false;
 // --- RAM shadows (current committed-to-RAM values) --------------------------
 uint8_t  g_bandIdx        = 0;
 uint8_t  g_volume         = 0;
+uint8_t  g_theme          = 0;
 uint16_t g_freq[MAX_BANDS_PERSISTED] = {0};
 
 // --- Dirty bookkeeping ------------------------------------------------------
-bool          g_bandDirty = false;
-bool          g_volDirty  = false;
+bool          g_bandDirty  = false;
+bool          g_volDirty   = false;
+bool          g_themeDirty = false;
 bool          g_freqDirty[MAX_BANDS_PERSISTED] = {false};
-unsigned long g_lastBandWrite = 0;
-unsigned long g_lastVolWrite  = 0;
+unsigned long g_lastBandWrite  = 0;
+unsigned long g_lastVolWrite   = 0;
+unsigned long g_lastThemeWrite = 0;
 unsigned long g_lastFreqWrite[MAX_BANDS_PERSISTED] = {0};
 
 bool ensureOpen() {
@@ -76,6 +80,13 @@ void commitVolume() {
     g_lastVolWrite = millis();
 }
 
+void commitTheme() {
+    if (!g_themeDirty || !ensureOpen()) return;
+    g_prefs.putUChar("theme", g_theme);
+    g_themeDirty     = false;
+    g_lastThemeWrite = millis();
+}
+
 void commitFrequency(uint8_t idx) {
     if (idx >= MAX_BANDS_PERSISTED) return;
     if (!g_freqDirty[idx] || !ensureOpen()) return;
@@ -89,8 +100,9 @@ void commitFrequency(uint8_t idx) {
 // Commit any key whose dirty-age has reached the rate-limit threshold.
 void maybeFlushExpired() {
     unsigned long now = millis();
-    if (g_bandDirty && (now - g_lastBandWrite >= PERSIST_MIN_WRITE_MS)) commitBand();
-    if (g_volDirty  && (now - g_lastVolWrite  >= PERSIST_MIN_WRITE_MS)) commitVolume();
+    if (g_bandDirty  && (now - g_lastBandWrite  >= PERSIST_MIN_WRITE_MS)) commitBand();
+    if (g_volDirty   && (now - g_lastVolWrite   >= PERSIST_MIN_WRITE_MS)) commitVolume();
+    if (g_themeDirty && (now - g_lastThemeWrite >= PERSIST_MIN_WRITE_MS)) commitTheme();
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         if (g_freqDirty[i] && (now - g_lastFreqWrite[i] >= PERSIST_MIN_WRITE_MS)) {
             commitFrequency(i);
@@ -108,7 +120,18 @@ void persistInit() {
     if (!ensureOpen()) return;
 
     uint16_t ver = g_prefs.getUShort("ver", 0);
-    if (ver != PERSIST_SCHEMA_VER) {
+    if (ver == 0) {
+        // First boot — stamp the current version so later branches treat
+        // the namespace as already-current.
+        Serial.println(F("[persist] first boot; initialising namespace"));
+        g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
+    } else if (ver == 1 && PERSIST_SCHEMA_VER == 2) {
+        // v1 -> v2 is purely additive (just adds "theme"): preserve band /
+        // vol / freq, seed the new key with a default.
+        Serial.println(F("[persist] upgrading schema v1 -> v2"));
+        g_prefs.putUChar("theme", 0);
+        g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
+    } else if (ver != PERSIST_SCHEMA_VER) {
         Serial.print(F("[persist] schema mismatch (stored="));
         Serial.print(ver);
         Serial.print(F(" current="));
@@ -124,6 +147,10 @@ void persistInit() {
     g_volume = g_prefs.getUChar("vol", 0);
     if (g_volume > MAX_VOLUME) g_volume = 0;
 
+    g_theme = g_prefs.getUChar("theme", 0);
+    // Themes.cpp clamps out-of-range indices on its side, so no bounds
+    // check is needed here.
+
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         char key[8];
         snprintf(key, sizeof(key), "freq%u", (unsigned)i);
@@ -132,8 +159,9 @@ void persistInit() {
 }
 
 void persistFlush() {
-    if (g_bandDirty) commitBand();
-    if (g_volDirty)  commitVolume();
+    if (g_bandDirty)  commitBand();
+    if (g_volDirty)   commitVolume();
+    if (g_themeDirty) commitTheme();
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         if (g_freqDirty[i]) commitFrequency(i);
     }
@@ -171,5 +199,17 @@ void persistSaveVolume(uint8_t vol) {
     if (vol == g_volume) return;
     g_volume   = vol;
     g_volDirty = true;
+    maybeFlushExpired();
+}
+
+uint8_t persistLoadTheme() { return g_theme; }
+
+void persistSaveTheme(uint8_t idx) {
+    if (idx == g_theme) return;
+    g_theme      = idx;
+    g_themeDirty = true;
+    // Theme changes are low-frequency menu actions — flush immediately,
+    // matching persistSaveBand()'s pattern.
+    commitTheme();
     maybeFlushExpired();
 }

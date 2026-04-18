@@ -37,6 +37,9 @@
 #include "ui_layout.h"
 #include "menu.h"
 #include "persist.h"
+#include "Themes.h"
+#include "Draw.h"
+#include "Scan.h"
 
 #include "version.h"
 
@@ -45,11 +48,13 @@
 // tweak is a one-line change. Each alias is the address of the font's
 // GFXfont struct (the same value that Free_Fonts.h macros like FSSB12
 // expand to in the TFT_eSPI examples).
-//   FREQ_FONT       — frequency digits + MHz label (large, bold, sans)
-//   HEADER_FONT     — "FM", "STEREO"/"MONO", "Vol"
-//   LABEL_FONT      — section labels (RSSI, SNR, PS:, footer text)
-//   VALUE_FONT      — numeric values next to the labels
-static const GFXfont* const FREQ_FONT   = &FreeSansBold24pt7b;  // ~34 px cap height
+// The big frequency digits now use TFT_eSPI's built-in Font 7 (a 7-segment
+// digital-clock face, selected by passing `FONT_BIG` as the trailing arg
+// to drawNumber / drawFloat in drawFrequency). The GFX free fonts below
+// cover everything else.
+//   HEADER_FONT  — "FM", "STEREO"/"MONO", "Vol"
+//   LABEL_FONT   — section labels (RSSI, SNR, PS:, footer text)
+//   VALUE_FONT   — numeric values next to the labels
 static const GFXfont* const HEADER_FONT = &FreeSansBold12pt7b;  // ~17 px cap height
 static const GFXfont* const LABEL_FONT  = &FreeSans9pt7b;       // ~13 px cap height
 static const GFXfont* const VALUE_FONT  = &FreeSansBold9pt7b;   // ~13 px cap height, bold
@@ -85,13 +90,22 @@ extern "C" __attribute__((used)) const char FW_IDENTITY[] =
 // Section 2: Dirty-flags pipeline
 // ============================================================================
 
-constexpr uint8_t DIRTY_HEADER = 1 << 0;
-constexpr uint8_t DIRTY_FREQ   = 1 << 1;
-constexpr uint8_t DIRTY_RDS    = 1 << 2;
-constexpr uint8_t DIRTY_METER  = 1 << 3;
-constexpr uint8_t DIRTY_VOL    = 1 << 4;
-constexpr uint8_t DIRTY_FOOTER = 1 << 5;
-constexpr uint8_t DIRTY_ALL    = 0x3F;
+// Single-bit repaint gate. ATS-Mini's pipeline redraws the whole screen
+// into a sprite every frame — our port keeps the gate so we only spend
+// pixels when something actually changed, but the payload is one
+// drawLayoutDefault() call that repaints everything.
+//
+// DIRTY_FREQ / DIRTY_VOL aliases are kept so the input-handler call
+// sites read naturally ("encoder rotated -> freq dirty"); they all flow
+// into the same bit internally.
+constexpr uint8_t DIRTY_ANY    = 1 << 0;
+constexpr uint8_t DIRTY_FREQ   = DIRTY_ANY;
+constexpr uint8_t DIRTY_RDS    = DIRTY_ANY;
+constexpr uint8_t DIRTY_METER  = DIRTY_ANY;
+constexpr uint8_t DIRTY_VOL    = DIRTY_ANY;
+constexpr uint8_t DIRTY_FOOTER = DIRTY_ANY;
+constexpr uint8_t DIRTY_HEADER = DIRTY_ANY;
+constexpr uint8_t DIRTY_ALL    = DIRTY_ANY;
 
 static uint8_t dirtyFlags = DIRTY_ALL;
 
@@ -103,27 +117,17 @@ static inline void markDirty(uint8_t bits) { dirtyFlags |= bits; }
 
 static TFT_eSPI tft = TFT_eSPI();
 
-// Sprite used by the analog needle S-meter. Allocated once in setup() at
-// GAUGE_W x GAUGE_H pixels (2 bytes each -> ~14 KB of heap) and re-used
-// every animation frame. Drawing into a sprite and pushing the whole rect
-// gives flicker-free redraws, which direct tft.drawLine() can't: the old
-// needle has to be erased before the new one is drawn, and an xor / wipe
-// pass always flashes.
-static TFT_eSprite gauge = TFT_eSprite(&tft);
-
-// Smoothed RSSI for the needle. Updated every NEEDLE_ANIM_MS from loop()
-// via a simple exponential moving average toward radioGetRssi(), giving
-// the needle a critically-damped mechanical feel. Starts at 0 so the
-// needle sweeps up from rest at boot.
-static float g_rssiDisplay = 0.0f;
-// Last drawn needle value (in dBuV-ish units, same scale as g_rssiDisplay).
-// Used to gate redraws — if the smoothed value hasn't moved more than
-// NEEDLE_EPSILON since the last paint, skip the frame.
-static float g_rssiLastDrawn = -999.0f;
-
-constexpr unsigned long NEEDLE_ANIM_MS = 30;   // redraw cadence (~33 Hz)
-constexpr float NEEDLE_EMA_ALPHA = 0.25f;      // ~400 ms to new steady-state
-constexpr float NEEDLE_EPSILON   = 0.2f;       // redraw threshold (dBuV)
+// Full-screen 8-bit double-buffer sprite — ATS-Mini ports their 16-bit
+// 320x170 sprite (~108 KB) onto this exact pattern; we drop to 8 bpp
+// because 320x240x16 = 153 KB overflows our DRAM heap. At 8 bpp the
+// sprite is 76 KB and the per-pixel RGB332 quantisation is visually
+// acceptable for the themed solid-colour UI (most art is flat fills).
+//
+// g_useSprite flips false only if createSprite() itself fails, in
+// which case updateDisplay() falls back to the per-widget rect-clear
+// pipeline (flickery but functional).
+static TFT_eSprite spr(&tft);
+static bool        g_useSprite = false;
 
 static AdjustMode currentMode = MODE_FREQUENCY;
 
@@ -138,18 +142,9 @@ static long g_menuEncLast = 0;
 
 static void initBacklight();
 static void initDisplay();
-static void initGauge();
 static void drawSplash();
 
 static void updateDisplay();
-static void drawHeader();
-static void drawFrequency();
-static void drawRds();
-static void drawMeter();
-static void drawVolume();
-static void drawFooter();
-static void drawNeedleGauge(float dbuv);
-static void pumpNeedleAnimation();
 
 static void handleEncoderRotation(long value);
 static void toggleMode();
@@ -172,9 +167,24 @@ void setup() {
 
     initBacklight();
     initDisplay();
-    initGauge();
     tft.setTouch(TOUCH_CALIBRATION);
     drawSplash();
+
+    // Allocate the flicker-free double-buffer as early as possible so
+    // the DRAM heap is at its most contiguous (before Preferences,
+    // SI4735 patch, RDS buffers, and the Core-0 radio task stack
+    // stake their claims). 8 bpp keeps us under 80 KB.
+    spr.setColorDepth(8);
+    if (spr.createSprite(SCREEN_W, SCREEN_H)) {
+        g_useSprite = true;
+        drawInit(spr);
+        Serial.printf("[main] frame sprite allocated (8bpp), free heap=%u\n",
+                      (unsigned)ESP.getFreeHeap());
+    } else {
+        g_useSprite = false;
+        drawInit(tft);
+        Serial.println(F("[main] frame sprite FAILED — per-widget clears fallback"));
+    }
 
     // Wait for the Si4732 RC reset circuit to release the chip.
     delay(500);
@@ -183,6 +193,15 @@ void setup() {
     // chip is powered up and avoid an extra retune on boot. First-boot
     // loads return 0 / default values.
     persistInit();
+
+    // Restore the user's chosen palette before any draw runs so the very
+    // first fillScreen picks up the right background. Out-of-range
+    // indices (e.g. downgraded firmware with fewer themes) clamp to 0.
+    {
+        uint8_t t = persistLoadTheme();
+        if (t >= (uint8_t)getTotalThemes()) t = 0;
+        themeIdx = t;
+    }
 
     // Seed the radio's band-table mutables directly from NVS. This must
     // happen *before* radioInit() so applyBandLocked() inside radioInit()
@@ -244,6 +263,14 @@ void loop() {
             menuClose();
         }
         if (!menuIsOpen()) handleMenuClose();
+    } else if (scanIsActive()) {
+        // During / after a sweep the encoder belongs to the scan —
+        // any click or long-press bails out and restores the listener's
+        // original tune via scanAbort().
+        if (btn == BTN_CLICK || btn == BTN_LONG_PRESS) {
+            scanAbort();
+            markDirty(DIRTY_ALL);
+        }
     } else {
         if (rotated) handleEncoderRotation(encValue);
         if (btn == BTN_CLICK)      toggleMode();
@@ -256,6 +283,16 @@ void loop() {
     // "catches up" on menu close because the poll intervals are self-
     // rate-limited and will fire on the next loop iteration after close.
     if (!menuIsOpen()) {
+        // Advance the bandscope sweep one sample per loop iteration. Each
+        // scanTick takes ~60-80 ms (tune + settle + quality read) so the
+        // full 200-sample sweep completes in ~15 s. Paint after every
+        // sample so the graph fills in progressively; always repaint on
+        // the transition-to-DONE tick too (scanTick() returns false for
+        // that one but the last sample still needs to show).
+        if (scanIsActive()) {
+            scanTick();
+            markDirty(DIRTY_ALL);
+        }
         if (radioPollSignal()) {
             markDirty(DIRTY_METER | DIRTY_HEADER);
         }
@@ -263,7 +300,6 @@ void loop() {
             markDirty(DIRTY_RDS);
         }
         handleTouch();
-        pumpNeedleAnimation();
         updateDisplay();
     } else if (menuTakeDirty()) {
         menuDraw(tft);
@@ -344,14 +380,15 @@ static void handleTouch() {
     uint16_t tx = 0, ty = 0;
     if (!tft.getTouch(&tx, &ty)) return;
 
-    // TFT_eSPI's getTouch applies the stored calibration but does not rotate
-    // the result. Our calibration was captured in rotation 0, so when the
-    // panel is flipped (rotation 2) the raw touch landing at visual (x, y)
-    // comes back as (W-1-x, H-1-y) — mirror it here to match the drawn UI.
-    if (DISPLAY_FLIPPED) {
-        tx = SCREEN_W - 1 - tx;
-        ty = SCREEN_H - 1 - ty;
-    }
+    // TFT_eSPI's getTouch applies the stored calibration but does not
+    // rotate the result. Our calibration was captured in rotation 0
+    // (native 240×320 portrait). We now run in rotation 3 (landscape
+    // 320×240) so transform the returned rotation-0 coords into the
+    // display's current logical frame:
+    //   (x_disp, y_disp) = (y_raw, PANEL_W_NATIVE - 1 - x_raw)
+    uint16_t rawX = tx, rawY = ty;
+    tx = rawY;
+    ty = PANEL_W_NATIVE - 1 - rawX;
 
     lastTouchMs = now;
 
@@ -378,10 +415,10 @@ static void initBacklight() {
 
 static void initDisplay() {
     tft.init();
-    // Rotation 0 = portrait right-side-up; rotation 2 = portrait upside-down
-    // for shields mounted in a case that can't be physically flipped. See
-    // DISPLAY_FLIPPED in ui_layout.h — flip the flag to switch.
-    tft.setRotation(DISPLAY_FLIPPED ? 2 : 0);
+    // Rotation 3 = landscape (320×240). Matches ATS-Mini's assumed canvas
+    // and is the only rotation this firmware supports from here on — the
+    // previous DISPLAY_FLIPPED knob retires.
+    tft.setRotation(3);
     tft.fillScreen(COL_BG);
 }
 
@@ -399,269 +436,24 @@ static void drawSplash() {
     tft.setTextDatum(TL_DATUM);
 }
 
+// ============================================================================
+// Section 7: Full-screen repaint
+// ============================================================================
+
 static void updateDisplay() {
     if (!dirtyFlags) return;
-
-    if (dirtyFlags & DIRTY_HEADER) drawHeader();
-    if (dirtyFlags & DIRTY_FREQ)   drawFrequency();
-    if (dirtyFlags & DIRTY_RDS)    drawRds();
-    if (dirtyFlags & DIRTY_METER)  drawMeter();
-    if (dirtyFlags & DIRTY_VOL)    drawVolume();
-    if (dirtyFlags & DIRTY_FOOTER) drawFooter();
-
+    if (g_useSprite) {
+        // Flicker-free: clear the off-screen buffer, repaint every
+        // widget into it, push the whole frame once. Atomic update,
+        // no tear or flash between fillRect and redraw of any widget.
+        spr.fillSprite(TH.bg);
+        drawLayoutDefault();
+        spr.pushSprite(0, 0);
+    } else {
+        // Fallback (sprite alloc failed): per-widget fillRect inside
+        // each draw function prevents inter-widget flicker but the
+        // single changing widget still flashes on update.
+        drawLayoutDefault();
+    }
     dirtyFlags = 0;
-}
-
-static void drawHeader() {
-    tft.fillRect(0, HEADER_Y, SCREEN_W, HEADER_H, COL_HEADER_BG);
-
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextColor(COL_HEADER_TXT, COL_HEADER_BG);
-    tft.setFreeFont(HEADER_FONT);
-    // Band name replaces the old hard-coded "FM" label so MW / SW show up
-    // at a glance. For the FM broadcast band this still reads "FM Broadcast"
-    // which is slightly longer than the v1 "FM" but fits the zone width.
-    tft.drawString(radioGetCurrentBand()->name, HEADER_MODE_X, HEADER_MODE_Y);
-
-    // Stereo pilot indicator — only meaningful on FM. On AM bands we skip
-    // the label entirely so the header doesn't lie about a feature the
-    // chip isn't decoding.
-    if (radioGetCurrentBand()->mode == MODE_FM) {
-        bool stereo = radioIsStereo();
-        tft.setTextColor(stereo ? COL_STEREO_ON : COL_STEREO_OFF, COL_HEADER_BG);
-        tft.setFreeFont(LABEL_FONT);
-        tft.drawString(stereo ? "STEREO" : " MONO ", HEADER_ST_X, HEADER_ST_Y);
-    }
-
-    // Right-aligned version string.
-    tft.setTextColor(COL_VERSION, COL_HEADER_BG);
-    tft.setFreeFont(LABEL_FONT);
-    tft.setTextDatum(TR_DATUM);
-    tft.drawString(FW_VERSION, HEADER_VER_R, HEADER_VER_Y);
-    tft.setTextDatum(TL_DATUM);
-}
-
-static void drawFrequency() {
-    tft.fillRect(0, FREQ_Y, SCREEN_W, FREQ_H, COL_BG);
-
-    // 1-pixel focus border — colour depends on which mode the encoder drives.
-    uint16_t border = (currentMode == MODE_FREQUENCY) ? COL_FOCUS : COL_NOFOCUS;
-    tft.drawRect(0, FREQ_Y, SCREEN_W, FREQ_H, border);
-
-    tft.setTextColor(COL_FREQ_TXT, COL_BG);
-
-    // Render the frequency + unit in a single string so the centring stays
-    // right across FM ("102.4 MHz") and AM ("1530 kHz") without
-    // hard-coding a fixed offset for the unit label. radio.cpp owns the
-    // unit choice via the current band's mode.
-    char buf[16];
-    radioFormatFrequency(buf, sizeof(buf));
-
-    tft.setTextDatum(MC_DATUM);
-    tft.setFreeFont(FREQ_FONT);
-    tft.drawString(buf, SCREEN_W / 2, FREQ_Y + FREQ_H / 2);
-    tft.setTextDatum(TL_DATUM);
-}
-
-static void drawRds() {
-    tft.fillRect(0, RDS_Y, SCREEN_W, RDS_H, COL_BG);
-
-    // Copy RDS strings under the radio mutex into local buffers so the
-    // radio task (Core 0) can't swap text out from under us mid-render.
-    // Buffers are sized to the radio.cpp mirror sizes (PS: 8 + NUL,
-    // RT: 64 + NUL); RDS_RT_MAX_CHARS caps the final drawn length to what
-    // fits on one line of the current label font.
-    char ps[9];
-    char rt[65];
-    radioGetRdsPs(ps, sizeof(ps));
-    radioGetRdsRt(rt, sizeof(rt));
-
-    tft.setTextDatum(TL_DATUM);
-
-    // PS name — "PS:" label in dim grey, then the 8-char name in white. When
-    // there is no RDS sync we show "--" so the zone is never empty on boot.
-    tft.setFreeFont(HEADER_FONT);
-    tft.setTextColor(COL_DIM_TXT, COL_BG);
-    tft.drawString("PS:", RDS_PS_X, RDS_PS_Y);
-    tft.setTextColor(COL_LABEL_TXT, COL_BG);
-    tft.drawString(ps[0] ? ps : "--", RDS_PS_X + 54, RDS_PS_Y);
-
-    // RadioText body — regular 9 pt free font, truncated to fit the screen
-    // width. Marquee scrolling is v2 (see docs/future_improvements.md).
-    tft.setFreeFont(LABEL_FONT);
-    tft.setTextColor(COL_DIM_TXT, COL_BG);
-    if (rt[0]) {
-        if (strlen(rt) > RDS_RT_MAX_CHARS) rt[RDS_RT_MAX_CHARS] = 0;
-        tft.drawString(rt, RDS_RT_X, RDS_RT_Y);
-    }
-}
-
-static void drawMeter() {
-    tft.fillRect(0, METER_Y, SCREEN_W, METER_H, COL_BG);
-
-    // "RSSI" label (left) + analog needle gauge (center, sprite-backed) +
-    // numeric dBuV (right). SNR and the stereo dot live on the second row.
-    tft.setTextDatum(TL_DATUM);
-    tft.setFreeFont(LABEL_FONT);
-    tft.setTextColor(COL_LABEL_TXT, COL_BG);
-    tft.drawString("RSSI", METER_LABEL_X, METER_BAR_Y);
-
-    uint8_t rssi = radioGetRssi();
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%u dB", rssi);
-    tft.setFreeFont(VALUE_FONT);
-    tft.drawString(buf, METER_VAL_X, METER_VAL_Y);
-
-    // SNR on the second row, plus a small stereo dot on the far right.
-    tft.setFreeFont(LABEL_FONT);
-    snprintf(buf, sizeof(buf), "SNR  %u dB", radioGetSnr());
-    tft.drawString(buf, METER_LABEL_X, METER_ROW2_Y);
-
-    bool stereo = radioIsStereo();
-    tft.fillCircle(STEREO_DOT_X, STEREO_DOT_Y, STEREO_DOT_R,
-                   stereo ? COL_STEREO_ON : COL_STEREO_OFF);
-    tft.setTextColor(COL_DIM_TXT, COL_BG);
-    tft.drawString("stereo", STEREO_DOT_X - 58, METER_ROW2_Y);
-
-    // Push a fresh needle gauge frame using the currently-smoothed RSSI so
-    // the dial is always in sync with the numeric value next to it.
-    drawNeedleGauge(g_rssiDisplay);
-}
-
-static void drawVolume() {
-    tft.fillRect(0, VOL_Y, SCREEN_W, VOL_H, COL_BG);
-
-    // Focus border — yellow in VOLUME mode, dim grey otherwise.
-    uint16_t border = (currentMode == MODE_VOLUME) ? COL_FOCUS : COL_NOFOCUS;
-    tft.drawRect(0, VOL_Y, SCREEN_W, VOL_H, border);
-
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextColor(COL_LABEL_TXT, COL_BG);
-    tft.setFreeFont(HEADER_FONT);
-    tft.drawString("Vol", VOL_LABEL_X, VOL_LABEL_Y);
-
-    uint8_t vol = radioGetVolume();
-    int barFill = map(vol, 0, MAX_VOLUME, 0, VOL_BAR_W);
-    tft.fillRect(VOL_BAR_X, VOL_BAR_Y, barFill, VOL_BAR_H, COL_VOL_FILL);
-    tft.drawRect(VOL_BAR_X, VOL_BAR_Y, VOL_BAR_W, VOL_BAR_H, COL_METER_FRAME);
-
-    char buf[4];
-    snprintf(buf, sizeof(buf), "%u", vol);
-    tft.drawString(buf, VOL_VAL_X, VOL_VAL_Y);
-}
-
-static void drawFooter() {
-    tft.fillRect(0, FOOTER_Y, SCREEN_W, FOOTER_H, COL_BG);
-    tft.setTextColor(COL_DIM_TXT, COL_BG);
-    tft.setTextDatum(TL_DATUM);
-    tft.setFreeFont(LABEL_FONT);
-
-    // Footer: version + power source + current-band frequency (mode-aware
-    // unit). The frequency duplicates the main readout intentionally — it's
-    // the only line that confirms the band's unit to users who don't look
-    // at the header band label.
-    char freqStr[16];
-    radioFormatFrequency(freqStr, sizeof(freqStr));
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%s  %s  %s",
-             FW_VERSION, POWER_SOURCE, freqStr);
-    tft.drawString(buf, FOOTER_TXT_X, FOOTER_TXT_Y);
-}
-
-// ============================================================================
-// Section 8: Needle S-meter
-//
-// Sprite-backed analog S-meter rendered in the left portion of the meter
-// zone. The pivot sits below the visible sprite (see GAUGE_PIVOT_Y in
-// ui_layout.h) so only the top fan of a larger imaginary dial shows
-// through — same silhouette as a vintage tuner's moving-coil meter.
-//
-// Flow:
-//   1. initGauge()        — allocate the sprite once at boot.
-//   2. drawMeter()        — called on DIRTY_METER: repaints RSSI/SNR chrome
-//                           and calls drawNeedleGauge(g_rssiDisplay).
-//   3. pumpNeedleAnimation() — called every loop(); advances the EMA of
-//                           radioGetRssi() into g_rssiDisplay and repaints
-//                           the sprite directly (bypassing the dirty-flag
-//                           pipeline) when the needle has visibly moved.
-// ============================================================================
-
-static void initGauge() {
-    // 16-bit colour sprite; ~14 KB heap. If this ever fails we fall back to
-    // a black rectangle — no crash, just no needle.
-    gauge.setColorDepth(16);
-    gauge.createSprite(GAUGE_W, GAUGE_H);
-    gauge.fillSprite(COL_GAUGE_BG);
-}
-
-// Map an S-meter value (in dBuV on the 0..RSSI_SCALE_MAX_DBUV scale) to a
-// needle angle in radians. Angle convention here: 0 rad = straight up,
-// positive rad = clockwise. The scale spans [-GAUGE_SWEEP_DEG, +GAUGE_SWEEP_DEG].
-static float gaugeAngleRad(float dbuv) {
-    float clamped = constrain(dbuv, 0.0f, (float)RSSI_SCALE_MAX_DBUV);
-    float frac    = clamped / (float)RSSI_SCALE_MAX_DBUV;          // 0..1
-    float deg     = -GAUGE_SWEEP_DEG + frac * 2.0f * GAUGE_SWEEP_DEG;
-    return deg * (float)PI / 180.0f;
-}
-
-static void drawNeedleGauge(float dbuv) {
-    gauge.fillSprite(COL_GAUGE_BG);
-
-    // Tick marks every 10 dBuV. Inner radius -> outer radius, projected
-    // from the pivot at the bottom. drawLine clips off-sprite coords, so
-    // the pivot being below the sprite is fine.
-    for (int tick = 0; tick <= (int)RSSI_SCALE_MAX_DBUV; tick += 10) {
-        float a = gaugeAngleRad((float)tick);
-        float s = sinf(a);
-        float c = cosf(a);
-        int x1 = GAUGE_PIVOT_X + (int)(GAUGE_R_INNER * s);
-        int y1 = GAUGE_PIVOT_Y - (int)(GAUGE_R_INNER * c);
-        int x2 = GAUGE_PIVOT_X + (int)(GAUGE_R_TICK  * s);
-        int y2 = GAUGE_PIVOT_Y - (int)(GAUGE_R_TICK  * c);
-        gauge.drawLine(x1, y1, x2, y2, COL_GAUGE_TICK);
-    }
-
-    // Needle — colour grades green -> yellow -> red as the signal rises so
-    // the user gets an at-a-glance strength read without reading numerals.
-    uint16_t needleCol = (dbuv < 20.0f) ? COL_NEEDLE_LOW
-                       : (dbuv < 45.0f) ? COL_NEEDLE_MID
-                                        : COL_NEEDLE_HIGH;
-    float a = gaugeAngleRad(dbuv);
-    float s = sinf(a);
-    float c = cosf(a);
-    int tipX = GAUGE_PIVOT_X + (int)(GAUGE_R_OUTER * s);
-    int tipY = GAUGE_PIVOT_Y - (int)(GAUGE_R_OUTER * c);
-    // Three parallel lines give a 3-px-wide needle without needing a
-    // dedicated drawThickLine helper. Perpendicular offset = (cos, sin).
-    int ox = (int)roundf(c);
-    int oy = (int)roundf(s);
-    gauge.drawLine(GAUGE_PIVOT_X,      GAUGE_PIVOT_Y,      tipX,      tipY,      needleCol);
-    gauge.drawLine(GAUGE_PIVOT_X + ox, GAUGE_PIVOT_Y + oy, tipX + ox, tipY + oy, needleCol);
-    gauge.drawLine(GAUGE_PIVOT_X - ox, GAUGE_PIVOT_Y - oy, tipX - ox, tipY - oy, needleCol);
-
-    // Pivot cap — small white dot at the base of the needle. Only the top
-    // half shows because the pivot lies below the sprite.
-    gauge.fillCircle(GAUGE_PIVOT_X, GAUGE_PIVOT_Y, 4, COL_GAUGE_TICK);
-
-    gauge.pushSprite(GAUGE_X, GAUGE_Y);
-    g_rssiLastDrawn = dbuv;
-}
-
-static void pumpNeedleAnimation() {
-    static unsigned long lastMs = 0;
-    unsigned long now = millis();
-    if (now - lastMs < NEEDLE_ANIM_MS) return;
-    lastMs = now;
-
-    // EMA toward the current radio RSSI. At α=0.25 and a 30 ms tick, the
-    // needle reaches ~90 % of a step in ~8 ticks (~240 ms) — reads as a
-    // mechanical needle settling rather than a pixel snap.
-    float target = (float)radioGetRssi();
-    g_rssiDisplay += NEEDLE_EMA_ALPHA * (target - g_rssiDisplay);
-
-    // Only repaint when the needle has actually moved. Once it settles
-    // within NEEDLE_EPSILON of the last-drawn value the gauge sits idle.
-    if (fabsf(g_rssiDisplay - g_rssiLastDrawn) > NEEDLE_EPSILON) {
-        drawNeedleGauge(g_rssiDisplay);
-    }
 }
