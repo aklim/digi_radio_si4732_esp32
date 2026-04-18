@@ -33,6 +33,8 @@
 #include "radio.h"
 #include "input.h"
 #include "ui_layout_tft.h"
+#include "menu.h"
+#include "persist.h"
 
 #include "version.h"
 
@@ -123,6 +125,11 @@ constexpr float NEEDLE_EPSILON   = 0.2f;       // redraw threshold (dBuV)
 
 static AdjustMode currentMode = MODE_FREQUENCY;
 
+// Last raw encoder value observed while the menu is open — used to compute
+// the per-poll delta the menu layer wants. Reset to 0 in openMenu() because
+// encoderSetBoundsForMenu() also resets the encoder to 0.
+static long g_menuEncLast = 0;
+
 // ============================================================================
 // Section 4: Forward declarations
 // ============================================================================
@@ -146,6 +153,8 @@ static void handleEncoderRotation(long value);
 static void toggleMode();
 static void setMode(AdjustMode newMode);
 static void handleTouch();
+static void openMenu();
+static void handleMenuClose();
 
 // ============================================================================
 // Section 5: setup() / loop()
@@ -168,7 +177,40 @@ void setup() {
     // Wait for the Si4732 RC reset circuit to release the chip.
     delay(500);
 
+    // Load persisted state BEFORE radioInit() so the chip can come up on the
+    // last-used band + freq instead of FM default and retuning. First-boot
+    // loads return 0 values and radioInit() falls through to defaults.
+    persistInit();
+
+    // Seed the radio's band table mutables from NVS before the chip is
+    // touched. This lets radioInit() tune directly to the saved band.
+    {
+        uint8_t savedBand = persistLoadBand();
+        if (savedBand < g_bandCount) {
+            // g_bandIdx inside radio.cpp is static, so we reach it indirectly:
+            // first setBand switches from the compile-time default (0), then
+            // we patch in the saved frequency for that band before radioInit()
+            // actually calls the chip.
+            for (size_t i = 0; i < g_bandCount; i++) {
+                uint16_t sf = persistLoadFrequency((uint8_t)i);
+                if (sf) g_bands[i].currentFreq = sf;
+            }
+        }
+        uint8_t savedVol = persistLoadVolume();
+        if (savedVol > 0) radioSetVolume(savedVol);  // safe before init too
+    }
+
     radioInit();
+
+    // If NVS says we should be on a non-zero band, switch now that the chip
+    // is live. radioSetBand() re-applies volume internally.
+    {
+        uint8_t savedBand = persistLoadBand();
+        if (savedBand != 0 && savedBand < g_bandCount) {
+            radioSetBand(savedBand);
+        }
+    }
+
     encoderInit();
     encoderSetBoundsForMode(currentMode, radioGetFrequency(), radioGetVolume());
 
@@ -178,23 +220,52 @@ void setup() {
 }
 
 void loop() {
+    // ---- Input --------------------------------------------------------------
     long encValue;
-    if (encoderPollRotation(encValue)) {
-        handleEncoderRotation(encValue);
+    bool rotated = encoderPollRotation(encValue);
+
+    ButtonEvent btn = encoderPollButton();
+
+    if (menuIsOpen()) {
+        // Menu owns all input while visible. Rotation is fed as a delta
+        // against the last observed raw value; click confirms / descends.
+        if (rotated) {
+            long delta = encValue - g_menuEncLast;
+            g_menuEncLast = encValue;
+            if (delta != 0) menuHandleRotation((int)delta);
+        }
+        if (btn == BTN_CLICK) {
+            menuHandleClick();
+        }
+        if (btn == BTN_LONG_PRESS) {
+            // Second long-press while menu is open = back out to main UI.
+            menuClose();
+        }
+        if (!menuIsOpen()) handleMenuClose();
+    } else {
+        if (rotated) handleEncoderRotation(encValue);
+        if (btn == BTN_CLICK)      toggleMode();
+        if (btn == BTN_LONG_PRESS) openMenu();
     }
-    if (encoderPollButton()) {
-        toggleMode();
+
+    // ---- Radio polling / main UI --------------------------------------------
+    // Skip polling work while the menu is open — the main zones are hidden
+    // so repainting them costs pixels nobody sees. Signal + RDS state
+    // "catches up" on menu close because the poll intervals are self-
+    // rate-limited and will fire on the next loop iteration after close.
+    if (!menuIsOpen()) {
+        if (radioPollSignal()) {
+            markDirty(DIRTY_METER | DIRTY_HEADER);
+        }
+        if (radioPollRds()) {
+            markDirty(DIRTY_RDS);
+        }
+        handleTouch();
+        pumpNeedleAnimation();
+        updateDisplay();
+    } else if (menuTakeDirty()) {
+        menuDraw(tft);
     }
-    if (radioPollSignal()) {
-        // Stereo pilot lives in the header; RSSI/SNR in the meter zone.
-        markDirty(DIRTY_METER | DIRTY_HEADER);
-    }
-    if (radioPollRds()) {
-        markDirty(DIRTY_RDS);
-    }
-    handleTouch();
-    pumpNeedleAnimation();
-    updateDisplay();
 }
 
 // ============================================================================
@@ -203,11 +274,13 @@ void loop() {
 
 static void handleEncoderRotation(long value) {
     if (currentMode == MODE_FREQUENCY) {
-        uint16_t newFreq = (uint16_t)(value * FM_FREQ_STEP);
-        if (newFreq < FM_FREQ_MIN) newFreq = FM_FREQ_MIN;
-        if (newFreq > FM_FREQ_MAX) newFreq = FM_FREQ_MAX;
+        const Band* b = radioGetCurrentBand();
+        uint16_t newFreq = (uint16_t)(value * b->step);
+        if (newFreq < b->minFreq) newFreq = b->minFreq;
+        if (newFreq > b->maxFreq) newFreq = b->maxFreq;
         if (newFreq != radioGetFrequency()) {
             radioSetFrequency(newFreq);
+            persistSaveFrequency(radioGetBandIdx(), newFreq);
             // Tune clears RDS mirrors; repaint the RDS zone so old text goes
             // away immediately instead of waiting for the next 200 ms poll.
             markDirty(DIRTY_FREQ | DIRTY_FOOTER | DIRTY_RDS);
@@ -217,6 +290,7 @@ static void handleEncoderRotation(long value) {
         if (newVol > MAX_VOLUME) newVol = MAX_VOLUME;
         if (newVol != radioGetVolume()) {
             radioSetVolume(newVol);
+            persistSaveVolume(newVol);
             markDirty(DIRTY_VOL);
         }
     }
@@ -234,6 +308,25 @@ static void setMode(AdjustMode newMode) {
 
 static void toggleMode() {
     setMode(currentMode == MODE_FREQUENCY ? MODE_VOLUME : MODE_FREQUENCY);
+}
+
+// Open the long-press menu. Encoder is reconfigured for menu semantics
+// (wide bounds, no acceleration, reset to 0) so rotation deltas match
+// 1 detent = 1 item. The subsequent close reverts via handleMenuClose().
+static void openMenu() {
+    Serial.println(F("Menu: open"));
+    encoderSetBoundsForMenu();
+    g_menuEncLast = 0;
+    menuOpen();
+}
+
+// Called right after menuClose() so we re-establish the main-UI encoder
+// bounds and force a full repaint (the menu overwrote every pixel, so no
+// partial refresh will do).
+static void handleMenuClose() {
+    Serial.println(F("Menu: close"));
+    encoderSetBoundsForMode(currentMode, radioGetFrequency(), radioGetVolume());
+    dirtyFlags = DIRTY_ALL;
 }
 
 // Poll the XPT2046 touch controller and route taps to the matching mode.
@@ -323,18 +416,24 @@ static void drawHeader() {
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(COL_HEADER_TXT, COL_HEADER_BG);
     tft.setFreeFont(HEADER_FONT);
-    tft.drawString("FM", HEADER_MODE_X, HEADER_MODE_Y);
+    // Band name replaces the old hard-coded "FM" label so MW / SW show up
+    // at a glance. For the FM broadcast band this still reads "FM Broadcast"
+    // which is slightly longer than the v1 "FM" but fits the zone width.
+    tft.drawString(radioGetCurrentBand()->name, HEADER_MODE_X, HEADER_MODE_Y);
 
-    // Stereo pilot indicator — only meaningful once the radio has locked; we
-    // still paint "MONO" when the flag is false so the label position is
-    // predictable from boot.
-    bool stereo = radioIsStereo();
-    tft.setTextColor(stereo ? COL_STEREO_ON : COL_STEREO_OFF, COL_HEADER_BG);
-    tft.setFreeFont(LABEL_FONT);
-    tft.drawString(stereo ? "STEREO" : " MONO ", HEADER_ST_X, HEADER_ST_Y);
+    // Stereo pilot indicator — only meaningful on FM. On AM bands we skip
+    // the label entirely so the header doesn't lie about a feature the
+    // chip isn't decoding.
+    if (radioGetCurrentBand()->mode == MODE_FM) {
+        bool stereo = radioIsStereo();
+        tft.setTextColor(stereo ? COL_STEREO_ON : COL_STEREO_OFF, COL_HEADER_BG);
+        tft.setFreeFont(LABEL_FONT);
+        tft.drawString(stereo ? "STEREO" : " MONO ", HEADER_ST_X, HEADER_ST_Y);
+    }
 
     // Right-aligned version string.
     tft.setTextColor(COL_VERSION, COL_HEADER_BG);
+    tft.setFreeFont(LABEL_FONT);
     tft.setTextDatum(TR_DATUM);
     tft.drawString(FW_VERSION, HEADER_VER_R, HEADER_VER_Y);
     tft.setTextDatum(TL_DATUM);
@@ -349,19 +448,17 @@ static void drawFrequency() {
 
     tft.setTextColor(COL_FREQ_TXT, COL_BG);
 
-    uint16_t freq = radioGetFrequency();
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%u.%u", freq / 100, (freq % 100) / 10);
+    // Render the frequency + unit in a single string so the centring stays
+    // right across FM ("102.4 MHz") and AM ("1530 kHz") without
+    // hard-coding a fixed offset for the unit label. radio.cpp owns the
+    // unit choice via the current band's mode.
+    char buf[16];
+    radioFormatFrequency(buf, sizeof(buf));
 
     tft.setTextDatum(MC_DATUM);
     tft.setFreeFont(FREQ_FONT);
-    // Slight left-shift of centre so "MHz" has room on the right.
-    tft.drawString(buf, SCREEN_W / 2 - 20, FREQ_Y + FREQ_H / 2);
+    tft.drawString(buf, SCREEN_W / 2, FREQ_Y + FREQ_H / 2);
     tft.setTextDatum(TL_DATUM);
-
-    tft.setTextColor(COL_LABEL_TXT, COL_BG);
-    tft.setFreeFont(HEADER_FONT);
-    tft.drawString("MHz", FREQ_UNIT_X, FREQ_UNIT_Y);
 }
 
 static void drawRds() {
@@ -452,10 +549,15 @@ static void drawFooter() {
     tft.setTextDatum(TL_DATUM);
     tft.setFreeFont(LABEL_FONT);
 
-    char buf[48];
-    uint16_t f = radioGetFrequency();
-    snprintf(buf, sizeof(buf), "%s  %s  %u.%u MHz",
-             FW_VERSION, POWER_SOURCE, f / 100, (f % 100) / 10);
+    // Footer: version + power source + current-band frequency (mode-aware
+    // unit). The frequency duplicates the main readout intentionally — it's
+    // the only line that confirms the band's unit to users who don't look
+    // at the header band label.
+    char freqStr[16];
+    radioFormatFrequency(freqStr, sizeof(freqStr));
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s  %s  %s",
+             FW_VERSION, POWER_SOURCE, freqStr);
     tft.drawString(buf, FOOTER_TXT_X, FOOTER_TXT_Y);
 }
 
