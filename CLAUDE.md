@@ -40,3 +40,16 @@ pio run --target size          # Show program size
 - All pin assignments and tuning parameters are `constexpr` constants at the top of `main.cpp`
 - Functions have Doxygen-style doc comments
 - All comments and documentation in English
+
+## Versioning & Releases
+
+- **Scheme:** Semantic Versioning (`vMAJOR.MINOR.PATCH`). Git tags on GitHub are the single source of truth for version numbers.
+- **Version injection:** `scripts/version.py` is a PlatformIO pre-build script (registered via `extra_scripts = pre:scripts/version.py` in both `env:esp32dev` and `env:shield_test`) that writes `include/version.h` from `git describe --tags --dirty`. The generated file is listed in `.gitignore` — **never commit it, never edit it by hand**.
+- **Macros available in code:** `FW_VERSION`, `FW_GIT_COMMIT`, `FW_GIT_DIRTY`, `FW_BUILD_DATE`. Consumed by the `FW_IDENTITY` string in `src/main.cpp`, which is kept alive by a no-op inline asm reference in `setup()` (the `used` attribute alone is not enough against `--gc-sections`). Visible via `strings .pio/build/esp32dev/firmware.elf | grep FW=`. **Not shown on OLED or printed to Serial by design** — do not add runtime display unless the user asks.
+- **Cutting a release** (full checklist in `docs/releasing.md`):
+  1. Move `[Unreleased]` items in `CHANGELOG.md` into a new `[X.Y.Z] - YYYY-MM-DD` section; update compare links.
+  2. Commit, then `git tag -a vX.Y.Z -m "Release vX.Y.Z"`.
+  3. `git push origin master && git push origin vX.Y.Z` — pushing the tag triggers `.github/workflows/release.yml`, which builds the `esp32dev` firmware and publishes a GitHub Release with `digi_radio-vX.Y.Z-esp32dev.{bin,elf}` attached.
+- **Do not** bump versions by editing files — the only knob is `git tag`.
+- **Do not** build `shield_test` env in the release workflow — it is a debug fixture for the Waveshare TFT shield, not a product artifact.
+- **Do not** rewrite or force-push a tag that has already been published as a Release — cut a new patch version instead.

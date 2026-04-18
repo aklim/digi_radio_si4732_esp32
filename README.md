@@ -74,6 +74,26 @@ The RSSI bar in the top-right corner shows the received signal strength.
 
 - [docs/hardware.md](docs/hardware.md) — wiring, components, Si4732 reset circuit
 - [docs/firmware.md](docs/firmware.md) — code structure, initialization flow, display layout
+- [docs/releasing.md](docs/releasing.md) — how to cut a new release
+
+## Versioning & Releases
+
+This project follows [Semantic Versioning](https://semver.org/). Firmware
+versions are tagged `vX.Y.Z`; see [CHANGELOG.md](CHANGELOG.md) for the full
+history and [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
+for downloadable binaries. Pushing a `vX.Y.Z` tag automatically triggers a
+GitHub Actions build that attaches `digi_radio-vX.Y.Z-esp32dev.{bin,elf}` to
+the Release.
+
+Each build embeds its version, short commit hash, and build date into the
+firmware image via [scripts/version.py](scripts/version.py). Inspect with:
+
+```bash
+strings .pio/build/esp32dev/firmware.elf | grep 'FW='
+# FW=v1.0.0 commit=abc123d built=2026-04-18
+```
+
+Full release procedure: [docs/releasing.md](docs/releasing.md).
 
 ## License
 

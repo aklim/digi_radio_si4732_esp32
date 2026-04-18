@@ -46,3 +46,6 @@
 .vscode/launch.json
 .vscode/ipch
 .DS_Store
+
+# Generated at build time by scripts/version.py
+include/version.h

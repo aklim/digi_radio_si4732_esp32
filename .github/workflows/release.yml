@@ -1,0 +1,71 @@
+name: Release
+
+# Triggered by pushing a Semantic Version tag (vMAJOR.MINOR.PATCH) to any
+# branch. Builds the esp32dev firmware and publishes a GitHub Release with the
+# compiled .bin and .elf attached. See docs/releasing.md for the full runbook.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write  # required to create Releases and upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          # scripts/version.py runs `git describe --tags`, which requires the
+          # full history; the default shallow clone would not see the tag.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware (esp32dev)
+        run: pio run -e esp32dev
+
+      - name: Stage release artifacts
+        run: |
+          mkdir -p release
+          TAG="${GITHUB_REF_NAME}"
+          cp .pio/build/esp32dev/firmware.bin  "release/digi_radio-${TAG}-esp32dev.bin"
+          cp .pio/build/esp32dev/firmware.elf  "release/digi_radio-${TAG}-esp32dev.elf"
+          ls -la release/
+
+      - name: Verify firmware identity string
+        # Sanity-check: the tag name must appear inside the embedded FW=
+        # string, otherwise version.h was generated from a wrong git state.
+        # No line anchor — `strings` can merge FW= with an adjacent printable
+        # byte in the preceding rodata blob.
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! strings "release/digi_radio-${TAG}-esp32dev.elf" | grep -q "FW=${TAG} "; then
+            echo "::error::FW_IDENTITY does not contain tag ${TAG}"
+            strings "release/digi_radio-${TAG}-esp32dev.elf" | grep 'FW=' || true
+            exit 1
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
