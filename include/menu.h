@@ -30,6 +30,7 @@ class TFT_eSPI;  // forward-declared to keep the header light
 enum MenuCmd : uint16_t {
     CMD_NONE   = 0x0000,
     CMD_BAND   = 0x1000,   // pick an entry from radio.h g_bands[]
+    CMD_THEME  = 0x1100,   // pick a palette from Themes.h catalogue
     CMD_CLOSE  = 0xFF00,   // dismiss the menu, return to main UI
 };
 

@@ -37,6 +37,7 @@
 #include "ui_layout.h"
 #include "menu.h"
 #include "persist.h"
+#include "Themes.h"
 
 #include "version.h"
 
@@ -185,6 +186,15 @@ void setup() {
     // chip is powered up and avoid an extra retune on boot. First-boot
     // loads return 0 / default values.
     persistInit();
+
+    // Restore the user's chosen palette before any draw runs so the very
+    // first fillScreen picks up the right background. Out-of-range
+    // indices (e.g. downgraded firmware with fewer themes) clamp to 0.
+    {
+        uint8_t t = persistLoadTheme();
+        if (t >= (uint8_t)getTotalThemes()) t = 0;
+        themeIdx = t;
+    }
 
     // Seed the radio's band-table mutables directly from NVS. This must
     // happen *before* radioInit() so applyBandLocked() inside radioInit()
@@ -445,13 +455,17 @@ static void drawHeader() {
 }
 
 static void drawFrequency() {
-    tft.fillRect(0, FREQ_Y, SCREEN_W, FREQ_H, COL_BG);
+    // Colours flow from the active theme (Themes.cpp) so the theme-picker
+    // menu has at least one visibly-reactive zone. The rest of the UI
+    // still reads the legacy COL_* constants and ignores theme changes
+    // until the Layout-Default port lands.
+    tft.fillRect(0, FREQ_Y, SCREEN_W, FREQ_H, TH.bg);
 
     // 1-pixel focus border — colour depends on which mode the encoder drives.
     uint16_t border = (currentMode == MODE_FREQUENCY) ? COL_FOCUS : COL_NOFOCUS;
     tft.drawRect(0, FREQ_Y, SCREEN_W, FREQ_H, border);
 
-    tft.setTextColor(COL_FREQ_TXT, COL_BG);
+    tft.setTextColor(TH.freq_text, TH.bg);
 
     // Font 7 is TFT_eSPI's built-in 7-segment digital-clock bitmap font,
     // the same face ATS-Mini uses for its big frequency — drawNumber /

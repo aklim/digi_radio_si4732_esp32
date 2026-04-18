@@ -21,11 +21,14 @@
 
 #include <stdint.h>
 
-// Bump this when the meaning of any persisted key changes. On boot, if the
-// stored value doesn't match, persistInit() wipes the namespace and
-// initialises defaults — callers get first-boot behaviour without a separate
-// reset path.
-constexpr uint16_t PERSIST_SCHEMA_VER = 1;
+// Bump this when the meaning of any persisted key changes. persistInit()
+// either applies a lazy upgrade (additive-only, keeps existing values) or
+// wipes and resets to defaults on anything else.
+//
+// Version history:
+//   v1 — initial: band, vol, freq<N>
+//   v2 — adds: theme (active palette index, see Themes.h)
+constexpr uint16_t PERSIST_SCHEMA_VER = 2;
 
 // Load cached values from NVS and apply the schema-version gate. Safe to
 // call before radioInit(); it does not touch the Si4735. Idempotent.
@@ -51,5 +54,9 @@ void     persistSaveFrequency(uint8_t bandIdx, uint16_t freq);
 // --- Global volume ---------------------------------------------------------
 uint8_t persistLoadVolume();
 void    persistSaveVolume(uint8_t vol);
+
+// --- Active UI theme (Themes.h catalogue index) ----------------------------
+uint8_t persistLoadTheme();
+void    persistSaveTheme(uint8_t idx);
 
 #endif  // PERSIST_H
