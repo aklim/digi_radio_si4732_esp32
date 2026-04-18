@@ -117,12 +117,18 @@ bool scanTick() {
                       (unsigned)freq, (unsigned)rssi, (unsigned)snr);
     }
 
-    if (++g_count >= SCAN_POINTS) g_status = SCAN_DONE;
+    if (++g_count >= SCAN_POINTS) {
+        g_status = SCAN_DONE;
+        Serial.printf("[scan] complete (%u samples)\n", (unsigned)g_count);
+    }
     return g_status == SCAN_RUN;
 }
 
 void scanAbort() {
     if (g_status == SCAN_OFF) return;
+    Serial.printf("[scan] abort at %u/%u, restoring freq=%u\n",
+                  (unsigned)g_count, (unsigned)SCAN_POINTS,
+                  (unsigned)g_savedFreq);
     g_status = SCAN_OFF;
     radioScanExit(g_savedFreq);
 }
