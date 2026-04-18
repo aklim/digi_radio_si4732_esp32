@@ -116,12 +116,17 @@ static inline void markDirty(uint8_t bits) { dirtyFlags |= bits; }
 
 static TFT_eSPI tft = TFT_eSPI();
 
-// Flicker-avoidance strategy: no full-screen sprite (153 KB would
-// overflow the DRAM heap on our setup). Each draw function in Draw.cpp
-// clears its own widget rect before painting, so there is no global
-// fillScreen between frames — stable-position widgets never see a
-// black flash. Background pixels outside widget rects are set once in
-// initDisplay() and thereafter untouched.
+// Full-screen 8-bit double-buffer sprite — ATS-Mini ports their 16-bit
+// 320x170 sprite (~108 KB) onto this exact pattern; we drop to 8 bpp
+// because 320x240x16 = 153 KB overflows our DRAM heap. At 8 bpp the
+// sprite is 76 KB and the per-pixel RGB332 quantisation is visually
+// acceptable for the themed solid-colour UI (most art is flat fills).
+//
+// g_useSprite flips false only if createSprite() itself fails, in
+// which case updateDisplay() falls back to the per-widget rect-clear
+// pipeline (flickery but functional).
+static TFT_eSprite spr(&tft);
+static bool        g_useSprite = false;
 
 static AdjustMode currentMode = MODE_FREQUENCY;
 
@@ -164,10 +169,21 @@ void setup() {
     tft.setTouch(TOUCH_CALIBRATION);
     drawSplash();
 
-    // Per-widget zone-clear pipeline: draw* calls paint the TFT directly,
-    // and each function wipes its own rect first. Saves the ~153 KB we'd
-    // otherwise need for a full-screen double buffer.
-    drawInit(tft);
+    // Allocate the flicker-free double-buffer as early as possible so
+    // the DRAM heap is at its most contiguous (before Preferences,
+    // SI4735 patch, RDS buffers, and the Core-0 radio task stack
+    // stake their claims). 8 bpp keeps us under 80 KB.
+    spr.setColorDepth(8);
+    if (spr.createSprite(SCREEN_W, SCREEN_H)) {
+        g_useSprite = true;
+        drawInit(spr);
+        Serial.printf("[main] frame sprite allocated (8bpp), free heap=%u\n",
+                      (unsigned)ESP.getFreeHeap());
+    } else {
+        g_useSprite = false;
+        drawInit(tft);
+        Serial.println(F("[main] frame sprite FAILED — per-widget clears fallback"));
+    }
 
     // Wait for the Si4732 RC reset circuit to release the chip.
     delay(500);
@@ -407,9 +423,18 @@ static void drawSplash() {
 
 static void updateDisplay() {
     if (!dirtyFlags) return;
-    // No global clear — each widget in drawLayoutDefault clears its
-    // own zone before repainting, so unchanged background pixels
-    // survive between frames and the eye never sees a flash.
-    drawLayoutDefault();
+    if (g_useSprite) {
+        // Flicker-free: clear the off-screen buffer, repaint every
+        // widget into it, push the whole frame once. Atomic update,
+        // no tear or flash between fillRect and redraw of any widget.
+        spr.fillSprite(TH.bg);
+        drawLayoutDefault();
+        spr.pushSprite(0, 0);
+    } else {
+        // Fallback (sprite alloc failed): per-widget fillRect inside
+        // each draw function prevents inter-widget flicker but the
+        // single changing widget still flashes on update.
+        drawLayoutDefault();
+    }
     dirtyFlags = 0;
 }
