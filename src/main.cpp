@@ -116,8 +116,13 @@ static inline void markDirty(uint8_t bits) { dirtyFlags |= bits; }
 
 static TFT_eSPI tft = TFT_eSPI();
 
-// The pre-ATS-Mini needle-gauge sprite retired in Step 4; Draw.cpp now
-// paints a segmented S-meter directly into `tft`.
+// Full-screen double-buffer sprite: 320x240x16bpp = 153 600 bytes. All
+// widget draws go here; one pushSprite() per frame makes the update
+// atomic so users never see a clear->redraw flash. Allocation can fail
+// on heap fragmentation, so every path that touches it consults
+// g_useSprite and falls back to a direct tft draw.
+static TFT_eSprite spr(&tft);
+static bool        g_useSprite = false;
 
 static AdjustMode currentMode = MODE_FREQUENCY;
 
@@ -157,9 +162,24 @@ void setup() {
 
     initBacklight();
     initDisplay();
-    drawInit(tft);
     tft.setTouch(TOUCH_CALIBRATION);
     drawSplash();
+
+    // Allocate the full-screen sprite. If the heap can't serve 153 KB,
+    // we fall back to direct-to-tft draws (flicker returns, but nothing
+    // crashes). Log which path won so field diagnosis is a serial-dump
+    // away.
+    spr.setColorDepth(16);
+    if (spr.createSprite(SCREEN_W, SCREEN_H)) {
+        g_useSprite = true;
+        drawInit(spr);
+        Serial.printf("[main] frame sprite allocated, free heap=%u\n",
+                      (unsigned)ESP.getFreeHeap());
+    } else {
+        g_useSprite = false;
+        drawInit(tft);
+        Serial.println(F("[main] frame sprite FAILED — falling back to direct tft"));
+    }
 
     // Wait for the Si4732 RC reset circuit to release the chip.
     delay(500);
@@ -399,10 +419,16 @@ static void drawSplash() {
 
 static void updateDisplay() {
     if (!dirtyFlags) return;
-    // No full-screen sprite: clear then repaint every widget in its
-    // upstream-canonical position. Any visible flicker is the cost of
-    // keeping the heap budget free for the scan sprite in Step 7.
-    tft.fillScreen(TH.bg);
-    drawLayoutDefault();
+    if (g_useSprite) {
+        // Sprite-backed: clear the off-screen buffer, repaint every
+        // widget, push the whole frame once. Atomic => no flicker.
+        spr.fillSprite(TH.bg);
+        drawLayoutDefault();
+        spr.pushSprite(0, 0);
+    } else {
+        // Fallback path — clear the TFT directly, accept the flicker.
+        tft.fillScreen(TH.bg);
+        drawLayoutDefault();
+    }
     dirtyFlags = 0;
 }

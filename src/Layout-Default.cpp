@@ -32,6 +32,21 @@ static const char *modeText(BandMode m) {
     }
 }
 
+// Short display form of a band name. Our radio.h spells bands out
+// ("FM Broadcast", "SW 41m", ...) which overflows the drawBandAndMode
+// slot; ATS-Mini uses a short `bandName` field. Here we synthesise it
+// by taking the first whitespace-delimited word ("FM", "MW", "SW"),
+// which is the visible substring upstream uses for the same bands.
+static void shortBandName(const char *full, char *buf, size_t n) {
+    if (n == 0) return;
+    size_t i = 0;
+    while (i + 1 < n && full[i] && full[i] != ' ') {
+        buf[i] = full[i];
+        i++;
+    }
+    buf[i] = '\0';
+}
+
 // Linear RSSI-to-strength map: 0..60 dBuV -> 0..49 segments. ATS-Mini's
 // upstream uses a per-modulation threshold table (AM vs FM vs SSB); we'll
 // port that once drawSMeter gains its own config step. This linear stub is
@@ -53,8 +68,13 @@ void drawLayoutDefault() {
 
     // Band + modulation box. drawBandAndMode selects Orbitron_Light_24
     // internally, so Layout-Default does not need its own TFT handle.
+    // radioGetCurrentBand()->name is the long form ("FM Broadcast"); the
+    // mode box sits immediately to the right of the band tag so we
+    // shorten it before drawing.
     const Band *band = radioGetCurrentBand();
-    drawBandAndMode(band->name, modeText(band->mode), BAND_OFFSET_X, BAND_OFFSET_Y);
+    char shortName[8];
+    shortBandName(band->name, shortName, sizeof(shortName));
+    drawBandAndMode(shortName, modeText(band->mode), BAND_OFFSET_X, BAND_OFFSET_Y);
 
     // Frequency + unit (MHz for FM, kHz for AM/MW/SW).
     uint16_t freq = radioGetFrequency();
