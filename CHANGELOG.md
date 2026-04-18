@@ -8,16 +8,51 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 ## [Unreleased]
 
 ### Added
+- TFT variant: **multi-band receiver**. New `Band` table in `radio.cpp`
+  with four bands — FM Broadcast (87.0–108.0 MHz), MW (520–1710 kHz),
+  SW 41 m (7100–7300 kHz), SW 31 m (9400–9900 kHz). `radioSetBand(idx)`
+  retunes the Si4735 via `setFM` / `setAM`, re-applies volume, and
+  restores the band's last-used frequency. RDS / stereo polling is
+  gated to FM. Header label and footer unit switch automatically
+  ("102.4 MHz" ↔ "1530 kHz") via the new mode-aware
+  `radioFormatFrequency()`. (docs/future_improvements.md → Radio features → AM/SW/LW bands)
+- TFT variant: **encoder long-press menu**. Holding the encoder button
+  for ≥500 ms opens a full-screen modal (`src/menu.cpp`) with entries
+  `Band → [FM Broadcast / MW / SW 41m / SW 31m]` and `Close`. Encoder
+  rotates the cursor, click confirms. Reuses the GFX free-font pipeline
+  from the needle/fonts PR. `ButtonEvent { BTN_NONE, BTN_CLICK,
+  BTN_LONG_PRESS }` discriminates clicks from long presses, inspired by
+  ATS-Mini's `ButtonTracker`. (docs/future_improvements.md → Input → menu system)
+- TFT variant: **NVS persistence** via new `src/persist.cpp` wrapper
+  around `<Preferences.h>`. Stores current band, per-band last-tuned
+  frequency, and volume; schema-versioned (`PERSIST_SCHEMA_VER`) à la
+  ATS-Mini so future key changes can wipe cleanly. Writes are
+  rate-limited (≥1 s per key) so rapid encoder rotation doesn't
+  hammer flash. First boot loads defaults from the band table.
 - TFT variant: analog needle S-meter. The flat RSSI bar is replaced by a
   sprite-backed arc gauge with tick marks at every 10 dBµV and a
   green→yellow→red needle that animates smoothly (EMA-smoothed,
   ~30 Hz redraw) between RSSI samples. Dial chrome renders through a
-  `TFT_eSprite` to stay flicker-free. Only affects `esp32dev_tft`.
+  `TFT_eSprite` to stay flicker-free.
 - TFT variant: Adafruit-GFX FreeFonts throughout the UI
   (`FreeSansBold24pt7b` for the frequency readout, `FreeSansBold12pt7b`
   for section headers, `FreeSans9pt7b` / `FreeSansBold9pt7b` for labels
   and numeric values). Replaces the legacy bitmap fonts (FONT2/4/7).
   Enabled via `LOAD_GFXFF` in `include/User_Setup.h`.
+
+### Changed
+- Shared `radio.cpp` / `input.cpp` modules evolved to multi-band + long-press
+  semantics. `encoderPollButton()` now returns a `ButtonEvent` enum
+  instead of `bool`; callers must handle `BTN_CLICK` and optionally
+  `BTN_LONG_PRESS`.
+- `radioSetFrequency()` clamps to the current band's min/max and updates
+  its `Band::currentFreq` field so band-switch-round-trip preserves
+  tune.
+
+### Deprecated / Out of scope (see docs/future_improvements.md)
+- OLED variant (`esp32dev`, `src/main.cpp`) is no longer actively
+  supported. The shared-code changes above likely break its build;
+  the legacy env will be removed in a future PR rather than fixed.
 
 ### Notes
 - The new frequency font is anti-aliased but smaller than the legacy
