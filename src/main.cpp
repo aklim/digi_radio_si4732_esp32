@@ -179,39 +179,39 @@ void setup() {
     // Wait for the Si4732 RC reset circuit to release the chip.
     delay(500);
 
-    // Load persisted state BEFORE radioInit() so the chip can come up on the
-    // last-used band + freq instead of FM default and retuning. First-boot
-    // loads return 0 values and radioInit() falls through to defaults.
+    // Load persisted state first so we can seed the band table before the
+    // chip is powered up and avoid an extra retune on boot. First-boot
+    // loads return 0 / default values.
     persistInit();
 
-    // Seed the radio's band table mutables from NVS before the chip is
-    // touched. This lets radioInit() tune directly to the saved band.
-    {
-        uint8_t savedBand = persistLoadBand();
-        if (savedBand < g_bandCount) {
-            // g_bandIdx inside radio.cpp is static, so we reach it indirectly:
-            // first setBand switches from the compile-time default (0), then
-            // we patch in the saved frequency for that band before radioInit()
-            // actually calls the chip.
-            for (size_t i = 0; i < g_bandCount; i++) {
-                uint16_t sf = persistLoadFrequency((uint8_t)i);
-                if (sf) g_bands[i].currentFreq = sf;
-            }
-        }
-        uint8_t savedVol = persistLoadVolume();
-        if (savedVol > 0) radioSetVolume(savedVol);  // safe before init too
+    // Seed the radio's band-table mutables directly from NVS. This must
+    // happen *before* radioInit() so applyBandLocked() inside radioInit()
+    // tunes to the right frequency on the first I2C write. We touch the
+    // table synchronously — the radio mutex doesn't exist yet and there
+    // is no task to race against.
+    for (size_t i = 0; i < g_bandCount; i++) {
+        uint16_t sf = persistLoadFrequency((uint8_t)i);
+        if (sf) g_bands[i].currentFreq = sf;
     }
 
+    // radioInit() creates the mutex, powers up the Si4732, applies the
+    // current (index-0) band, then becomes thread-safe. Any radioSetXxx
+    // call is safe from here on, even before radioStart() launches the
+    // polling task.
     radioInit();
 
-    // If NVS says we should be on a non-zero band, switch now that the chip
-    // is live. radioSetBand() re-applies volume internally.
-    {
-        uint8_t savedBand = persistLoadBand();
-        if (savedBand != 0 && savedBand < g_bandCount) {
-            radioSetBand(savedBand);
-        }
+    // Apply saved band + volume now that the mutex is in place.
+    uint8_t savedBand = persistLoadBand();
+    if (savedBand != 0 && savedBand < g_bandCount) {
+        radioSetBand(savedBand);
     }
+    uint8_t savedVol = persistLoadVolume();
+    if (savedVol > 0) radioSetVolume(savedVol);
+
+    // Launch the radio polling task on Core 0. After this returns the UI
+    // loop on Core 1 can freely call radioSetXxx / radioGetXxx; the task
+    // drives signal + RDS polling at its own cadence.
+    radioStart();
 
     encoderInit();
     encoderSetBoundsForMode(currentMode, radioGetFrequency(), radioGetVolume());
@@ -466,8 +466,15 @@ static void drawFrequency() {
 static void drawRds() {
     tft.fillRect(0, RDS_Y, SCREEN_W, RDS_H, COL_BG);
 
-    const char* ps = radioGetRdsPs();
-    const char* rt = radioGetRdsRt();
+    // Copy RDS strings under the radio mutex into local buffers so the
+    // radio task (Core 0) can't swap text out from under us mid-render.
+    // Buffers are sized to the radio.cpp mirror sizes (PS: 8 + NUL,
+    // RT: 64 + NUL); RDS_RT_MAX_CHARS caps the final drawn length to what
+    // fits on one line of the current label font.
+    char ps[9];
+    char rt[65];
+    radioGetRdsPs(ps, sizeof(ps));
+    radioGetRdsRt(rt, sizeof(rt));
 
     tft.setTextDatum(TL_DATUM);
 
@@ -477,17 +484,15 @@ static void drawRds() {
     tft.setTextColor(COL_DIM_TXT, COL_BG);
     tft.drawString("PS:", RDS_PS_X, RDS_PS_Y);
     tft.setTextColor(COL_LABEL_TXT, COL_BG);
-    tft.drawString(ps && ps[0] ? ps : "--", RDS_PS_X + 54, RDS_PS_Y);
+    tft.drawString(ps[0] ? ps : "--", RDS_PS_X + 54, RDS_PS_Y);
 
     // RadioText body — regular 9 pt free font, truncated to fit the screen
     // width. Marquee scrolling is v2 (see docs/future_improvements.md).
     tft.setFreeFont(LABEL_FONT);
     tft.setTextColor(COL_DIM_TXT, COL_BG);
-    if (rt && rt[0]) {
-        char line[RDS_RT_MAX_CHARS + 1];
-        strncpy(line, rt, RDS_RT_MAX_CHARS);
-        line[RDS_RT_MAX_CHARS] = 0;
-        tft.drawString(line, RDS_RT_X, RDS_RT_Y);
+    if (rt[0]) {
+        if (strlen(rt) > RDS_RT_MAX_CHARS) rt[RDS_RT_MAX_CHARS] = 0;
+        tft.drawString(rt, RDS_RT_X, RDS_RT_Y);
     }
 }
 

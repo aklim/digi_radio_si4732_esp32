@@ -1,5 +1,7 @@
 // ============================================================================
-// radio.cpp — Si4732 multi-band receiver wrapper (FM + MW/SW AM).
+// radio.cpp — Si4732 multi-band receiver wrapper (FM + MW/SW AM) with a
+//             dedicated FreeRTOS task pinned to Core 0 driving the I2C
+//             polling on its own cadence.
 //
 // The Si4732 RESET pin is NOT connected to any GPIO. An external RC circuit
 // handles hardware reset at power-on, so the PU2CLR SI4735 library's normal
@@ -15,17 +17,28 @@
 // has a saved band) is identical to the v1 single-band behaviour.
 //
 // RDS mirror buffers: the library exposes getRdsText0A / getRdsText2A as
-// char* into shared buffers that can change under us mid-read. We keep local
-// mirrors (g_ps, g_rt) and diff against them on every poll so the UI gets a
-// single clean "changed" signal per update. RDS polling is disabled while on
-// an AM band; the Si4732 doesn't decode RDS off-FM and polling would just be
-// wasted I2C bandwidth.
+// char* into shared buffers that can change under us mid-read. We keep
+// local mirrors (g_ps, g_rt) — writes from the task are single-threaded,
+// reads from the UI take the mutex.
+//
+// Threading (see radio.h for the full contract):
+//   * g_mutex serialises every access to the Si4735 library instance and
+//     to the cached-state globals (g_rssi, g_snr, g_stereo, g_ps, g_rt,
+//     g_signalChanged, g_rdsChanged, g_bandIdx, per-band currentFreq).
+//   * radioTaskBody (pinned to Core 0) is the only place that issues the
+//     periodic signal / RDS polls; the UI on Core 1 consumes cached state.
+//   * radioSetXxx functions (called from UI) take the same mutex around
+//     the library call — band switches briefly block the task on the
+//     order of one task-tick.
 // ============================================================================
 
 #include "radio.h"
 
 #include <Arduino.h>
 #include <SI4735.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -51,15 +64,21 @@ Band g_bands[] = {
 
 const size_t g_bandCount = sizeof(g_bands) / sizeof(g_bands[0]);
 
-static uint8_t g_bandIdx = 0;
-
 // --- Owned state (private to this translation unit) -------------------------
-static SI4735 g_radio;
+static SI4735  g_radio;
 
-static uint8_t g_volume = DEFAULT_VOLUME;
-static uint8_t g_rssi   = 0;
-static uint8_t g_snr    = 0;
-static bool    g_stereo = false;
+static uint8_t g_bandIdx = 0;
+static uint8_t g_volume  = DEFAULT_VOLUME;
+static uint8_t g_rssi    = 0;
+static uint8_t g_snr     = 0;
+static bool    g_stereo  = false;
+
+// Change flags drained by radioPollSignal() / radioPollRds(). The task
+// sets them whenever a cached value actually moved; the UI clears them on
+// read. Using plain bools under the mutex instead of atomics keeps the
+// reasoning simple: one writer (task), one reader (UI), both gated.
+static bool    g_signalChanged = false;
+static bool    g_rdsChanged    = false;
 
 // --- Signal-quality polling -------------------------------------------------
 constexpr unsigned long SIGNAL_POLL_INTERVAL_MS = 500;
@@ -76,21 +95,33 @@ static unsigned long g_lastRdsSync = 0;
 static char g_ps[9]  = {0};
 static char g_rt[65] = {0};
 
-// --- Internal helpers -------------------------------------------------------
+// --- FreeRTOS primitives ----------------------------------------------------
+// g_mutex is created in radioInit() *before* any other thread can observe
+// the module. radioStart() creates the task after radioInit() returns, so
+// the task never sees a null mutex.
+static SemaphoreHandle_t g_mutex      = nullptr;
+static TaskHandle_t       g_taskHandle = nullptr;
 
-static Band& activeBand() { return g_bands[g_bandIdx]; }
+constexpr uint32_t RADIO_TASK_STACK    = 4096;
+constexpr UBaseType_t RADIO_TASK_PRIO  = 1;
+constexpr BaseType_t  RADIO_TASK_CORE  = 0;    // pin to pro_cpu; loopTask lives on app_cpu (1)
+constexpr TickType_t  RADIO_TASK_TICK  = pdMS_TO_TICKS(20);
 
-// Apply the current band's settings to the Si4735. Called from radioInit()
-// and radioSetBand(). Separates chip reconfiguration from the bookkeeping
-// (volume re-apply, mirror clear) that both call sites need.
-static void applyBandToRadio() {
-    Band& b = activeBand();
+// ============================================================================
+// Internal helpers — called with g_mutex already held.
+// ============================================================================
+
+static Band& activeBandLocked() { return g_bands[g_bandIdx]; }
+
+// Apply the current band's settings to the Si4735. Caller holds g_mutex.
+static void applyBandLocked() {
+    Band& b = activeBandLocked();
 
     if (b.mode == MODE_FM) {
         g_radio.setFM(b.minFreq, b.maxFreq, b.currentFreq, b.step);
         // Permissive RDS block-error thresholds — more data at the cost of
         // occasional garbled characters, which is the right tradeoff for a
-        // portable FM receiver. Same as v1.
+        // portable FM receiver.
         g_radio.setRdsConfig(1, 3, 3, 3, 3);
     } else {
         // AM / MW / SW. SSB would take a separate setSSB path once the lib
@@ -104,123 +135,10 @@ static void applyBandToRadio() {
     g_radio.setVolume(g_volume);
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
-
-void radioInit() {
-    Serial.println(F("[radio] initializing Si4732 (no reset pin, RC-driven)..."));
-
-    // SEN pin wired to GND -> I2C address 0x11 (library index 0).
-    g_radio.setDeviceI2CAddress(0);
-
-    // CTSIEN=0, GPO2OEN=0, PATCH=0, XOSCEN=1, FUNC=FM (we'll retune to the
-    // current band right after), OPMODE=analog audio.
-    g_radio.setPowerUp(0, 0, 0, XOSCEN_CRYSTAL, POWER_UP_FM, SI473X_ANALOG_AUDIO);
-    g_radio.radioPowerUp();
-
-    // Crystal oscillator stabilisation.
-    delay(250);
-
-    g_radio.setVolume(g_volume);
-    g_radio.getFirmware();
-
-    applyBandToRadio();
-
-    Band& b = activeBand();
-    b.currentFreq = g_radio.getFrequency();
-    g_volume      = g_radio.getVolume();
-
-    Serial.print(F("[radio] Si4732 ready. Firmware PN: "));
-    Serial.println(g_radio.getFirmwarePN());
-    Serial.print(F("[radio] Band: "));
-    Serial.print(b.name);
-    Serial.print(F("  Tuned to: "));
-    Serial.println(b.currentFreq);
-}
-
-void radioSetBand(uint8_t idx) {
-    if (idx >= g_bandCount) return;
-    if (idx == g_bandIdx) return;
-
-    // Snapshot the outgoing band's tune so we can restore on return.
-    activeBand().currentFreq = g_radio.getFrequency();
-
-    g_bandIdx = idx;
-    applyBandToRadio();
-
-    // Swap to a fresh, empty signal cache so the UI redraws from "no data"
-    // rather than showing the previous band's last RSSI/SNR until the next
-    // 500 ms poll fires.
-    g_rssi   = 0;
-    g_snr    = 0;
-    g_stereo = false;
-    g_lastSignalPoll = 0;
-
-    // RDS is meaningless off-FM; clear the mirrors so any UI that peeks at
-    // them sees empty strings instead of the last FM station's text.
-    g_ps[0] = 0;
-    g_rt[0] = 0;
-    g_lastRdsSync = 0;
-
-    Band& b = activeBand();
-    Serial.print(F("[radio] Band switch -> "));
-    Serial.print(b.name);
-    Serial.print(F("  freq="));
-    Serial.println(b.currentFreq);
-}
-
-uint8_t radioGetBandIdx() { return g_bandIdx; }
-
-const Band* radioGetCurrentBand() { return &g_bands[g_bandIdx]; }
-
-void radioSetFrequency(uint16_t freq) {
-    Band& b = activeBand();
-    if (freq < b.minFreq) freq = b.minFreq;
-    if (freq > b.maxFreq) freq = b.maxFreq;
-
-    g_radio.setFrequency(freq);
-    b.currentFreq = freq;
-
-    // Drop any text from the previous station. The library's own RDS buffers
-    // are protected (can't memset from here), but we only copy from them when
-    // getRdsSync() is true — and sync is lost on tune, so the library's stale
-    // bytes won't leak into our mirrors before the new station locks in.
-    if (b.mode == MODE_FM) {
-        g_ps[0] = 0;
-        g_rt[0] = 0;
-        g_lastRdsSync = 0;
-    }
-}
-
-uint16_t radioGetFrequency() { return activeBand().currentFreq; }
-
-void radioSetVolume(uint8_t v) {
-    if (v > MAX_VOLUME) v = MAX_VOLUME;
-    g_radio.setVolume(v);
-    g_volume = v;
-}
-
-uint8_t radioGetVolume() { return g_volume; }
-
-void radioFormatFrequency(char* buf, size_t bufsize) {
-    if (!buf || bufsize < 2) return;
-    const Band& b = activeBand();
-
-    if (b.mode == MODE_FM) {
-        // Stored in 10 kHz units; render as MHz with one decimal.
-        snprintf(buf, bufsize, "%u.%u MHz",
-                 b.currentFreq / 100,
-                 (b.currentFreq % 100) / 10);
-    } else {
-        // Stored in 1 kHz units. MW/SW show whole kHz; LW would look odd in
-        // kHz (e.g. "198 kHz" broadcast) but the same format works there
-        // too, so we unify.
-        snprintf(buf, bufsize, "%u kHz", b.currentFreq);
-    }
-}
-
-bool radioPollSignal() {
+// Poll signal quality on the task's cadence. Returns true when any cached
+// value changed; caller (the task) OR-sets g_signalChanged accordingly.
+// Caller holds g_mutex.
+static bool pollSignalLocked() {
     unsigned long now = millis();
     if (now - g_lastSignalPoll < SIGNAL_POLL_INTERVAL_MS) return false;
     g_lastSignalPoll = now;
@@ -228,9 +146,7 @@ bool radioPollSignal() {
     g_radio.getCurrentReceivedSignalQuality();
     uint8_t rssi   = g_radio.getCurrentRSSI();
     uint8_t snr    = g_radio.getCurrentSNR();
-    // getCurrentPilot() is only meaningful on FM; force mono on AM bands so
-    // the stereo dot in the UI doesn't flicker with noise.
-    bool    stereo = (activeBand().mode == MODE_FM) && g_radio.getCurrentPilot();
+    bool    stereo = (activeBandLocked().mode == MODE_FM) && g_radio.getCurrentPilot();
 
     bool changed = (rssi != g_rssi) || (snr != g_snr) || (stereo != g_stereo);
     g_rssi   = rssi;
@@ -239,13 +155,9 @@ bool radioPollSignal() {
     return changed;
 }
 
-uint8_t radioGetRssi()   { return g_rssi; }
-uint8_t radioGetSnr()    { return g_snr; }
-bool    radioIsStereo()  { return g_stereo; }
-
-bool radioPollRds() {
-    // No RDS on AM bands — short-circuit before spending any I2C bandwidth.
-    if (activeBand().mode != MODE_FM) return false;
+// Poll RDS on the task's cadence. No-op on non-FM bands. Caller holds mutex.
+static bool pollRdsLocked() {
+    if (activeBandLocked().mode != MODE_FM) return false;
 
     unsigned long now = millis();
     if (now - g_lastRdsPoll < RDS_POLL_INTERVAL_MS) return false;
@@ -288,5 +200,252 @@ bool radioPollRds() {
     return changed;
 }
 
-const char* radioGetRdsPs() { return g_ps; }
-const char* radioGetRdsRt() { return g_rt; }
+// ============================================================================
+// Radio task — pinned to Core 0, wakes every RADIO_TASK_TICK ms, polls the
+// chip if the per-kind rate-limit window has elapsed, and flags state
+// changes for the UI to consume.
+// ============================================================================
+
+static void radioTaskBody(void* /*arg*/) {
+    Serial.printf("[radio] task running on core %d\n", xPortGetCoreID());
+    for (;;) {
+        if (xSemaphoreTake(g_mutex, portMAX_DELAY) == pdTRUE) {
+            bool sc = pollSignalLocked();
+            bool rc = pollRdsLocked();
+            if (sc) g_signalChanged = true;
+            if (rc) g_rdsChanged    = true;
+            xSemaphoreGive(g_mutex);
+        }
+        vTaskDelay(RADIO_TASK_TICK);
+    }
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+void radioInit() {
+    Serial.println(F("[radio] initializing Si4732 (no reset pin, RC-driven)..."));
+
+    // Create the mutex before any cross-core visibility of this module's
+    // state. Until radioStart() fires there is only one caller (setup on
+    // Core 1), but we take/release the mutex anyway so the same code path
+    // works before and after the task exists.
+    g_mutex = xSemaphoreCreateMutex();
+    configASSERT(g_mutex != nullptr);
+
+    // SEN pin wired to GND -> I2C address 0x11 (library index 0).
+    g_radio.setDeviceI2CAddress(0);
+
+    // CTSIEN=0, GPO2OEN=0, PATCH=0, XOSCEN=1, FUNC=FM (we'll retune to the
+    // current band right after), OPMODE=analog audio.
+    g_radio.setPowerUp(0, 0, 0, XOSCEN_CRYSTAL, POWER_UP_FM, SI473X_ANALOG_AUDIO);
+    g_radio.radioPowerUp();
+
+    // Crystal oscillator stabilisation.
+    delay(250);
+
+    g_radio.setVolume(g_volume);
+    g_radio.getFirmware();
+
+    applyBandLocked();
+
+    Band& b = activeBandLocked();
+    b.currentFreq = g_radio.getFrequency();
+    g_volume      = g_radio.getVolume();
+
+    Serial.print(F("[radio] Si4732 ready. Firmware PN: "));
+    Serial.println(g_radio.getFirmwarePN());
+    Serial.print(F("[radio] Band: "));
+    Serial.print(b.name);
+    Serial.print(F("  Tuned to: "));
+    Serial.println(b.currentFreq);
+}
+
+void radioStart() {
+    if (g_taskHandle) return;   // idempotent — protect against double-call
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        radioTaskBody, "radio",
+        RADIO_TASK_STACK, nullptr,
+        RADIO_TASK_PRIO, &g_taskHandle,
+        RADIO_TASK_CORE);
+    if (ok != pdPASS) {
+        // Catastrophic but extremely unlikely — log loudly. The UI will
+        // still render but signal / RDS polling stops; radioSetXxx stays
+        // functional via the mutex on Core 1.
+        Serial.println(F("[radio] ERROR: xTaskCreatePinnedToCore failed"));
+        g_taskHandle = nullptr;
+    }
+}
+
+void radioSetBand(uint8_t idx) {
+    if (idx >= g_bandCount) return;
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    if (idx != g_bandIdx) {
+        // Snapshot the outgoing band's tune so we can restore on return.
+        activeBandLocked().currentFreq = g_radio.getFrequency();
+
+        g_bandIdx = idx;
+        applyBandLocked();
+
+        // Fresh, empty signal cache — the UI redraws from "no data"
+        // rather than showing the previous band's last reading until the
+        // next 500 ms poll fires.
+        g_rssi   = 0;
+        g_snr    = 0;
+        g_stereo = false;
+        g_lastSignalPoll = 0;
+        g_signalChanged  = true;
+
+        // RDS is meaningless off-FM; clear mirrors so UI peeks see empty.
+        g_ps[0] = 0;
+        g_rt[0] = 0;
+        g_lastRdsSync = 0;
+        g_rdsChanged  = true;
+
+        Band& b = activeBandLocked();
+        Serial.print(F("[radio] Band switch -> "));
+        Serial.print(b.name);
+        Serial.print(F("  freq="));
+        Serial.println(b.currentFreq);
+    }
+    xSemaphoreGive(g_mutex);
+}
+
+uint8_t radioGetBandIdx() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t v = g_bandIdx;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+const Band* radioGetCurrentBand() {
+    // Return a stable pointer. Individual fields may mutate; callers that
+    // need a consistent snapshot should call radioGetFrequency() (mutex-
+    // protected) rather than dereferencing ->currentFreq.
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const Band* p = &g_bands[g_bandIdx];
+    xSemaphoreGive(g_mutex);
+    return p;
+}
+
+void radioSetFrequency(uint16_t freq) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    Band& b = activeBandLocked();
+    if (freq < b.minFreq) freq = b.minFreq;
+    if (freq > b.maxFreq) freq = b.maxFreq;
+
+    g_radio.setFrequency(freq);
+    b.currentFreq = freq;
+
+    // Drop any text from the previous station. See same rationale as v1:
+    // we only copy from the library's buffers when getRdsSync() is true,
+    // and sync is lost on tune, so the library's stale bytes won't leak
+    // into our mirrors before the new station locks in.
+    if (b.mode == MODE_FM) {
+        g_ps[0] = 0;
+        g_rt[0] = 0;
+        g_lastRdsSync = 0;
+        g_rdsChanged  = true;
+    }
+    xSemaphoreGive(g_mutex);
+}
+
+uint16_t radioGetFrequency() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint16_t v = activeBandLocked().currentFreq;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+void radioSetVolume(uint8_t v) {
+    if (v > MAX_VOLUME) v = MAX_VOLUME;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_radio.setVolume(v);
+    g_volume = v;
+    xSemaphoreGive(g_mutex);
+}
+
+uint8_t radioGetVolume() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t v = g_volume;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+void radioFormatFrequency(char* buf, size_t bufsize) {
+    if (!buf || bufsize < 2) return;
+
+    // Snapshot the two fields we need under the mutex so the task can't
+    // swap the band out from under us between reading mode and freq.
+    BandMode mode;
+    uint16_t freq;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    mode = activeBandLocked().mode;
+    freq = activeBandLocked().currentFreq;
+    xSemaphoreGive(g_mutex);
+
+    if (mode == MODE_FM) {
+        // Stored in 10 kHz units; render as MHz with one decimal.
+        snprintf(buf, bufsize, "%u.%u MHz", freq / 100, (freq % 100) / 10);
+    } else {
+        // Stored in 1 kHz units. MW/SW show whole kHz.
+        snprintf(buf, bufsize, "%u kHz", freq);
+    }
+}
+
+bool radioPollSignal() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    bool changed = g_signalChanged;
+    g_signalChanged = false;
+    xSemaphoreGive(g_mutex);
+    return changed;
+}
+
+uint8_t radioGetRssi() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t v = g_rssi;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+uint8_t radioGetSnr() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t v = g_snr;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+bool radioIsStereo() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    bool v = g_stereo;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+bool radioPollRds() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    bool changed = g_rdsChanged;
+    g_rdsChanged = false;
+    xSemaphoreGive(g_mutex);
+    return changed;
+}
+
+void radioGetRdsPs(char* buf, size_t bufsize) {
+    if (!buf || bufsize < 1) return;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    size_t n = bufsize - 1 < sizeof(g_ps) - 1 ? bufsize - 1 : sizeof(g_ps) - 1;
+    memcpy(buf, g_ps, n);
+    buf[n] = 0;
+    xSemaphoreGive(g_mutex);
+}
+
+void radioGetRdsRt(char* buf, size_t bufsize) {
+    if (!buf || bufsize < 1) return;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    size_t n = bufsize - 1 < sizeof(g_rt) - 1 ? bufsize - 1 : sizeof(g_rt) - 1;
+    memcpy(buf, g_rt, n);
+    buf[n] = 0;
+    xSemaphoreGive(g_mutex);
+}
