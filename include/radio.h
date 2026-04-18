@@ -163,4 +163,29 @@ bool radioPollRds();
 void radioGetRdsPs(char* buf, size_t bufsize);
 void radioGetRdsRt(char* buf, size_t bufsize);
 
+// RDS Programme Identification code (4-hex-digit station ID). Returns 0
+// when not decoded yet, on no-sync, or on non-FM bands.
+uint16_t radioGetRdsPi();
+
+// --- Bandwidth filter -------------------------------------------------------
+// Si4735 has distinct AM/SSB/FM filter tables. We keep two bandwidth
+// catalogues (FM 5 presets, AM 7 presets) whose indices are _stable_ per
+// mode; radio.cpp resolves the mode at call time.
+//
+// `idx` counts positions in the active-mode catalogue (0..count-1). Call
+// radioGetBandwidthCount() / radioGetBandwidthDesc() to enumerate.
+uint8_t     radioGetBandwidthIdx();
+void        radioSetBandwidthIdx(uint8_t idx);
+uint8_t     radioGetBandwidthCount();
+const char* radioGetBandwidthDesc();       // active entry, e.g. "84k", "3.0k"
+const char* radioGetBandwidthDescAt(uint8_t idx);
+
+// --- AGC + attenuator -------------------------------------------------------
+// The Si4735 packs AGC-enable and the manual attenuator into a single
+// (AGCDIS, AGCIDX) pair. We expose the knob that user menus want: a
+// single attIdx where 0 = AGC ON and 1..37 = AGC OFF + attenuation.
+uint8_t radioGetAgcAttIdx();
+void    radioSetAgcAttIdx(uint8_t idx);
+bool    radioAgcIsOn();                    // convenience: attIdx == 0
+
 #endif  // RADIO_H

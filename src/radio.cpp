@@ -92,8 +92,41 @@ static unsigned long g_lastRdsSync = 0;
 
 // Local mirrors of the RDS Programme Service (8 chars) and RadioText (64 chars)
 // plus terminator. Zero-initialised => empty string => "no RDS".
-static char g_ps[9]  = {0};
-static char g_rt[65] = {0};
+static char     g_ps[9]  = {0};
+static char     g_rt[65] = {0};
+static uint16_t g_rdsPi  = 0;  // 16-bit PI code; 0 == "not decoded"
+
+// --- Bandwidth catalogues (verbatim indices/labels from ats-mini) ----------
+// FM filter: 5 presets; SI4735 setFmBandwidth takes the `filter_idx` field.
+struct BwEntry { uint8_t filter; const char *desc; };
+static const BwEntry kBwFm[] = {
+    { 0, "Auto" },   // automatic (default)
+    { 1, "110k" },
+    { 2, "84k"  },
+    { 3, "60k"  },
+    { 4, "40k"  },
+};
+// AM/SW/MW filter: 7 presets; SI4735 setBandwidth takes AMCHFLT, AMPLFLT.
+static const BwEntry kBwAm[] = {
+    { 4, "1.0k" },
+    { 5, "1.8k" },
+    { 3, "2.0k" },
+    { 6, "2.5k" },
+    { 2, "3.0k" },
+    { 1, "4.0k" },
+    { 0, "6.0k" },
+};
+static const uint8_t kBwFmCount = sizeof(kBwFm) / sizeof(kBwFm[0]);
+static const uint8_t kBwAmCount = sizeof(kBwAm) / sizeof(kBwAm[0]);
+// Default picks match upstream's defaultBwIdx[] (FM=0 "Auto", AM=4 "3.0k").
+static uint8_t g_bwIdxFm = 0;
+static uint8_t g_bwIdxAm = 4;
+
+// --- AGC + manual attenuator (packed into SI4735's AGCDIS / AGCIDX) --------
+// idx == 0      -> AGCDIS=0 (enabled), AGCIDX ignored
+// idx == 1..37  -> AGCDIS=1 (disabled), AGCIDX = idx
+// ATS-Mini uses the same convention; see Menu.cpp drawAgc.
+static uint8_t g_agcAttIdx = 0;
 
 // --- FreeRTOS primitives ----------------------------------------------------
 // g_mutex is created in radioInit() *before* any other thread can observe
@@ -185,14 +218,24 @@ static bool pollRdsLocked() {
                 g_rt[64] = 0;
                 changed = true;
             }
+
+            // PI is part of every RDS block and usually arrives within the
+            // first packet after sync. Store it into the mirror unchanged
+            // so the sidebar shows a stable 4-hex-digit station ID.
+            uint16_t pi = g_radio.getRdsPI();
+            if (pi && pi != g_rdsPi) {
+                g_rdsPi = pi;
+                changed = true;
+            }
         }
     } else if (g_lastRdsSync && (now - g_lastRdsSync > RDS_STALE_MS)) {
         // Lost sync long enough that any displayed text is almost certainly
         // from a different station. Clear so the UI shows "no RDS" instead of
         // a stale PS name.
-        if (g_ps[0] || g_rt[0]) {
+        if (g_ps[0] || g_rt[0] || g_rdsPi) {
             g_ps[0] = 0;
             g_rt[0] = 0;
+            g_rdsPi = 0;
             changed = true;
         }
     }
@@ -301,6 +344,7 @@ void radioSetBand(uint8_t idx) {
         // RDS is meaningless off-FM; clear mirrors so UI peeks see empty.
         g_ps[0] = 0;
         g_rt[0] = 0;
+        g_rdsPi = 0;
         g_lastRdsSync = 0;
         g_rdsChanged  = true;
 
@@ -346,6 +390,7 @@ void radioSetFrequency(uint16_t freq) {
     if (b.mode == MODE_FM) {
         g_ps[0] = 0;
         g_rt[0] = 0;
+        g_rdsPi = 0;
         g_lastRdsSync = 0;
         g_rdsChanged  = true;
     }
@@ -447,5 +492,114 @@ void radioGetRdsRt(char* buf, size_t bufsize) {
     size_t n = bufsize - 1 < sizeof(g_rt) - 1 ? bufsize - 1 : sizeof(g_rt) - 1;
     memcpy(buf, g_rt, n);
     buf[n] = 0;
+    xSemaphoreGive(g_mutex);
+}
+
+uint16_t radioGetRdsPi() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint16_t pi = g_rdsPi;
+    xSemaphoreGive(g_mutex);
+    return pi;
+}
+
+// --- Bandwidth --------------------------------------------------------------
+// The catalogue used at call time depends on the active band's mode.
+// Callers that index into the "current" table get consistent indices as
+// long as they stay on one mode; after a band switch, the default index
+// for the new mode applies (0 for FM, 4 for AM).
+
+static const BwEntry* currentBwTable(BandMode mode, uint8_t &count, uint8_t &activeIdx) {
+    if (mode == MODE_FM) {
+        count     = kBwFmCount;
+        activeIdx = g_bwIdxFm;
+        return kBwFm;
+    } else {
+        count     = kBwAmCount;
+        activeIdx = g_bwIdxAm;
+        return kBwAm;
+    }
+}
+
+uint8_t radioGetBandwidthIdx() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t count, idx;
+    (void)currentBwTable(activeBandLocked().mode, count, idx);
+    xSemaphoreGive(g_mutex);
+    return idx;
+}
+
+uint8_t radioGetBandwidthCount() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t count, idx;
+    (void)currentBwTable(activeBandLocked().mode, count, idx);
+    xSemaphoreGive(g_mutex);
+    return count;
+}
+
+const char* radioGetBandwidthDesc() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t count, idx;
+    const BwEntry *tbl = currentBwTable(activeBandLocked().mode, count, idx);
+    const char *desc = tbl[idx].desc;
+    xSemaphoreGive(g_mutex);
+    return desc;
+}
+
+const char* radioGetBandwidthDescAt(uint8_t idx) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t count, _idx;
+    const BwEntry *tbl = currentBwTable(activeBandLocked().mode, count, _idx);
+    const char *desc = (idx < count) ? tbl[idx].desc : "--";
+    xSemaphoreGive(g_mutex);
+    return desc;
+}
+
+void radioSetBandwidthIdx(uint8_t idx) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    BandMode mode = activeBandLocked().mode;
+    uint8_t count, _idx;
+    const BwEntry *tbl = currentBwTable(mode, count, _idx);
+    if (idx >= count) idx = 0;
+
+    // Stash the new index in the mode-specific slot so it survives a
+    // band switch that doesn't change mode (FM -> FM, AM -> AM ...).
+    if (mode == MODE_FM) {
+        g_bwIdxFm = idx;
+        g_radio.setFmBandwidth(tbl[idx].filter);
+    } else {
+        g_bwIdxAm = idx;
+        // AM setBandwidth takes a second "AMPLFLT" argument — pass 1 to
+        // enable the power-line noise filter, matching upstream.
+        g_radio.setBandwidth(tbl[idx].filter, 1);
+    }
+    xSemaphoreGive(g_mutex);
+}
+
+// --- AGC + attenuator -------------------------------------------------------
+
+uint8_t radioGetAgcAttIdx() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    uint8_t v = g_agcAttIdx;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
+bool radioAgcIsOn() {
+    return radioGetAgcAttIdx() == 0;
+}
+
+void radioSetAgcAttIdx(uint8_t idx) {
+    // SI4735 accepts 0..37 (AGCIDX when AGCDIS=1). Clamp so bad values
+    // from the UI can't wander into undefined territory.
+    if (idx > 37) idx = 37;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_agcAttIdx = idx;
+    if (idx == 0) {
+        // AGC enabled, attenuator index ignored.
+        g_radio.setAutomaticGainControl(0, 0);
+    } else {
+        // AGC disabled, manual attenuation applied.
+        g_radio.setAutomaticGainControl(1, idx);
+    }
     xSemaphoreGive(g_mutex);
 }

@@ -323,18 +323,38 @@ static void drawInfo(int x, int y, int sx) {
     s.drawString(stepBuf, 48 + x, row - 3 * 16, 2);
 
     s.drawString("BW:",  6 + x, row - 2 * 16, 2);
-    s.drawString("--",  48 + x, row - 2 * 16, 2);
+    s.drawString(radioGetBandwidthDesc(), 48 + x, row - 2 * 16, 2);
 
-    s.drawString("AGC:", 6 + x, row - 1 * 16, 2);
-    s.drawString("--",  48 + x, row - 1 * 16, 2);
+    // AGC: "On" when AGC active, "Att:NN" when manual attenuator armed.
+    // Upstream switches the row label itself, not just the value, when
+    // attenuation is in use — replicate that for parity.
+    if (radioAgcIsOn()) {
+        s.drawString("AGC:", 6 + x, row - 1 * 16, 2);
+        s.drawString("On",  48 + x, row - 1 * 16, 2);
+    } else {
+        char attBuf[4];
+        snprintf(attBuf, sizeof(attBuf), "%02u", (unsigned)radioGetAgcAttIdx());
+        s.drawString("Att:", 6 + x, row - 1 * 16, 2);
+        s.drawString(attBuf, 48 + x, row - 1 * 16, 2);
+    }
 
     // Volume — real value. Upstream has mute/squelch states that change
     // the colour + text; those join in a later step.
     s.drawString("Vol:", 6 + x, row + 0 * 16, 2);
     s.drawNumber(radioGetVolume(), 48 + x, row + 0 * 16, 2);
 
-    s.drawString("PI:",  6 + x, row + 1 * 16, 2);
-    s.drawString("--",  48 + x, row + 1 * 16, 2);
+    // PI: 4-hex-digit station ID from the RDS mirror. Shows "--" when
+    // the radio is not FM or PI has not decoded yet.
+    uint16_t pi = radioGetRdsPi();
+    if (pi && band->mode == MODE_FM) {
+        char piBuf[8];
+        snprintf(piBuf, sizeof(piBuf), "%04X", pi);
+        s.drawString("PI:", 6 + x, row + 1 * 16, 2);
+        s.drawString(piBuf, 48 + x, row + 1 * 16, 2);
+    } else {
+        s.drawString("PI:", 6 + x, row + 1 * 16, 2);
+        s.drawString("--", 48 + x, row + 1 * 16, 2);
+    }
 
     s.drawString("Time:", 6 + x, row + 2 * 16, 2);
     s.drawString("--:--", 48 + x, row + 2 * 16, 2);
