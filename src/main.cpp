@@ -219,6 +219,21 @@ void setup() {
     // polling task.
     radioInit();
 
+    // Seed the BW / AGC shadows from NVS now that the radio mutex exists.
+    // These take effect on the next applyBandLocked() call (which happens
+    // implicitly on every band switch, and explicitly inside radioSetBand
+    // below when the saved band is non-zero). To make sure the boot band
+    // itself picks them up we re-apply the current band after seeding.
+    radioSeedBandwidthIdx(true,  persistLoadBandwidthFm());
+    radioSeedBandwidthIdx(false, persistLoadBandwidthAm());
+    radioSeedAgcIdx(true,  persistLoadAgcFm());
+    radioSeedAgcIdx(false, persistLoadAgcAm());
+    // radioInit() already ran setFM+BW+AGC with the *defaults* (shadows
+    // hadn't been seeded yet); re-apply now so the chip reflects the saved
+    // user selections. If radioSetBand() fires below with a non-zero saved
+    // band, that path re-applies too and this call is redundant-but-cheap.
+    radioApplyCurrentBand();
+
     // Apply saved band + volume now that the mutex is in place.
     uint8_t savedBand = persistLoadBand();
     if (savedBand != 0 && savedBand < g_bandCount) {
@@ -264,12 +279,34 @@ void loop() {
         }
         if (!menuIsOpen()) handleMenuClose();
     } else if (scanIsActive()) {
-        // During / after a sweep the encoder belongs to the scan —
-        // any click or long-press bails out and restores the listener's
-        // original tune via scanAbort().
-        if (btn == BTN_CLICK || btn == BTN_LONG_PRESS) {
-            scanAbort();
-            markDirty(DIRTY_ALL);
+        // Scan rules:
+        //   RUN  — the chip is mid-sweep; swallow rotation (can't retune
+        //          without scrambling samples). Click / long-press aborts
+        //          and returns to the pre-scan frequency.
+        //   DONE — the graph is held. Encoder rotation becomes normal
+        //          tuning (drawScanGraphs() re-centers on radioGetFrequency()
+        //          so the graph scrolls with the tune, matching ATS-Mini's
+        //          CMD_SCAN branch, ats-mini.ino:825). Click exits the
+        //          scan keeping the new tune; long-press aborts, restoring
+        //          the original tune.
+        if (scanIsDone()) {
+            if (rotated) handleEncoderRotation(encValue);
+            if (btn == BTN_CLICK) {
+                // Hold current tune through the abort+exit sequence.
+                uint16_t keepFreq = radioGetFrequency();
+                scanAbort();
+                radioSetFrequency(keepFreq);
+                persistSaveFrequency(radioGetBandIdx(), keepFreq);
+                markDirty(DIRTY_ALL);
+            } else if (btn == BTN_LONG_PRESS) {
+                scanAbort();
+                markDirty(DIRTY_ALL);
+            }
+        } else {
+            if (btn == BTN_CLICK || btn == BTN_LONG_PRESS) {
+                scanAbort();
+                markDirty(DIRTY_ALL);
+            }
         }
     } else {
         if (rotated) handleEncoderRotation(encValue);

@@ -34,6 +34,13 @@ void scanAbort();
 // static band scale to the sweep graph.
 bool scanIsActive();
 
+// True only after the sweep has completed (all samples collected or
+// aborted at band edge). Used by the input router to enable rotary
+// encoder scrolling over the finished graph: during the sweep we
+// cannot retune the chip without corrupting in-flight samples, but
+// once scanning stops the encoder can drive the tune cursor again.
+bool scanIsDone();
+
 // Release the captured sweep back to the scan-off state. Call this when
 // leaving scan mode — unlike scanAbort this does NOT retune the radio
 // (caller already handled the tune, e.g. via radioScanExit).

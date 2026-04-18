@@ -170,7 +170,9 @@ uint16_t radioGetRdsPi();
 // --- Bandwidth filter -------------------------------------------------------
 // Si4735 has distinct AM/SSB/FM filter tables. We keep two bandwidth
 // catalogues (FM 5 presets, AM 7 presets) whose indices are _stable_ per
-// mode; radio.cpp resolves the mode at call time.
+// mode; radio.cpp resolves the mode at call time. The shadow for the
+// inactive mode survives across band switches, so FM keeps its filter
+// independently of AM/SW.
 //
 // `idx` counts positions in the active-mode catalogue (0..count-1). Call
 // radioGetBandwidthCount() / radioGetBandwidthDesc() to enumerate.
@@ -180,13 +182,36 @@ uint8_t     radioGetBandwidthCount();
 const char* radioGetBandwidthDesc();       // active entry, e.g. "84k", "3.0k"
 const char* radioGetBandwidthDescAt(uint8_t idx);
 
+// Seed the FM / AM bandwidth shadow without touching the chip. Intended for
+// main.cpp boot: persist.cpp's loaded values are pushed in before radioInit
+// so the first applyBandLocked() picks them up.
+void radioSeedBandwidthIdx(bool fm, uint8_t idx);
+
 // --- AGC + attenuator -------------------------------------------------------
 // The Si4735 packs AGC-enable and the manual attenuator into a single
-// (AGCDIS, AGCIDX) pair. We expose the knob that user menus want: a
-// single attIdx where 0 = AGC ON and 1..37 = AGC OFF + attenuation.
+// (AGCDIS, AGCIDX) pair. We expose a single per-mode idx:
+//   idx == 0       -> AGC enabled (AGCDIS=0)
+//   idx == 1       -> AGC disabled, AGCIDX = 0 (no attenuation)
+//   idx >= 1       -> AGC disabled, AGCIDX = idx - 1
+// Semantics match ATS-Mini's doAgc (Menu.cpp). Per-mode ranges:
+//   FM: 0..27  (28 entries, one "AGC on" row + 27 manual-attenuator rows)
+//   AM: 0..37  (38 entries)
+// The FM and AM indices are tracked independently — switching bands
+// between modes doesn't clobber the other mode's setting.
 uint8_t radioGetAgcAttIdx();
+uint8_t radioGetAgcAttMax();               // max idx for the active mode
 void    radioSetAgcAttIdx(uint8_t idx);
 bool    radioAgcIsOn();                    // convenience: attIdx == 0
+
+// Seed the FM / AM AGC shadow without touching the chip. Boot-time twin of
+// radioSeedBandwidthIdx.
+void radioSeedAgcIdx(bool fm, uint8_t idx);
+
+// Re-apply the active band's full setup (setFM/setAM + BW + AGC + volume).
+// Used at boot so the chip picks up BW/AGC values seeded from NVS *after*
+// radioInit()'s initial apply pass. radioSetBand() calls this transitively
+// whenever the user switches bands.
+void radioApplyCurrentBand();
 
 // --- Low-level hooks for the bandscope sweep -------------------------------
 // These expose just enough of the SI4735 for Scan.cpp to retune the chip

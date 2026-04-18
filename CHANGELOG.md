@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **BW menu entry.** Pick the Si4732 IF filter from the active band's
+  catalogue (FM: `Auto / 110k / 84k / 60k / 40k`; AM/SW: `1.0k .. 6.0k`,
+  seven steps). The FM and AM filter indices are tracked independently so
+  each mode keeps its own choice across band switches.
+- **AGC menu entry.** Toggle AGC on, disable it with no attenuation, or
+  select a manual attenuator step. FM allows indices 0..27 (1 + 27 att),
+  AM allows 0..37 (1 + 37 att). Index semantics match ATS-Mini
+  (`0` → AGC on, `≥1` → AGC off + att `idx-1`).
+- **Scan scroll.** After a bandscope sweep completes, the rotary encoder
+  tunes normally while the graph is held — the waveform re-centers on the
+  live frequency as you rotate, mirroring ATS-Mini's `CMD_SCAN` branch.
+  Click exits the scan at the current tune (saved to NVS); long-press
+  aborts and restores the pre-scan frequency. During the sweep itself
+  rotation is still ignored to avoid corrupting in-flight samples.
+- **Menu viewport scrolling.** List pickers now scroll the visible window
+  to keep the cursor on-screen, so the 28–38 AGC rows and future long
+  lists render without overflowing into the hint footer.
+
+### Changed
+
+- BW and AGC are re-applied in `applyBandLocked()` so user selections
+  survive band switches. Previously the chip reverted to each mode's
+  power-on default on every `setFM` / `setAM`.
+- **AGC indexing realigned with ATS-Mini.** Index `1` now means "AGC off,
+  no attenuation" (ATS-Mini `doAgc`), and `idx = N` maps to AGCIDX = `N-1`.
+  Pre-existing attenuator selections are interpreted one step further out
+  after the upgrade — this only affects users who had set a manual
+  attenuator by editing the firmware before this release.
+- `CMD_SCAN` renumbered from `0x1200` to `0x1B00`; `CMD_AGC = 0x1200` and
+  `CMD_BANDWIDTH = 0x1300` take their ATS-Mini-matched slots. Menu
+  command codes are internal enums and never persisted, so no migration
+  is needed.
+
+### Fixed
+
+- **S-meter length and stereo-split.** `strengthFromRssi` now uses
+  ATS-Mini's mode-dependent S-point table (FM / AM thresholds,
+  Utils.cpp `getStrength`) returning 1..17 instead of the previous
+  linear 0..49 stub. The meter bar stops at the right length and the
+  stereo-indicator stripe covers the whole active bar cleanly.
+- **Battery icon geometry.** `drawBattery` now matches ATS-Mini 1:1:
+  `drawRoundRect` outline (no AA halo), stepped positive terminal via
+  two `drawLine` calls at x+29 / x+30, and `fillRoundRect(r=2)` inner
+  level so the fill stays inside the contour's rounded corners. Fixes
+  the "cut-out" artefact and the fill bleeding through the frame.
+- **Battery icon + voltage label no longer clipped by the band tag.**
+  `drawBandAndMode` was doing a per-widget `fillRect(x - 80, y - 1, 220, 30)`
+  which, with `BAND_OFFSET_X=150`, wiped x=70..290 every frame — eating
+  the left 6 px of the battery frame and the entire voltage string
+  (text sits at x≈251..281). Removed the clear; ATS-Mini's implementation
+  doesn't do it either and the fullscreen sprite clear already handles
+  inter-frame erase.
+- **Random characters under the frequency when RT is empty.**
+  `drawRadioText` walks the RT buffer line-by-line via `rt += strlen(rt)+1`
+  (ATS-Mini's multi-line convention with double-NUL termination). Our
+  `pollRdsLocked` sanitizer was writing a single-line result into an
+  uninitialised stack buffer, then `memcpy(g_rt, cleaned, 65)` copied
+  65 bytes including the garbage past the first NUL. The multi-line
+  walk stepped into that garbage and rendered it where the band scale
+  should have been. Fixed by zero-initialising the sanitizer stage
+  buffer so every byte past the terminator is also NUL.
+- **Sidebar bottom no longer clipped by the scale.** `drawScale`'s
+  per-widget `fillRect(0, 120, 320, 50)` was overwriting the sidebar's
+  bottom border (sidebar ends at y=129, the clear started at y=120).
+  Removed — matches ATS-Mini (the full sprite is cleared each frame in
+  `updateDisplay`, so the per-widget clear was redundant).
+- **Blank RadioText flashes eliminated at the source.** `pollRdsLocked()`
+  now gates on `getRdsSyncFound()` (matching ATS-Mini's triple-gate in
+  `Station.cpp`) and sanitises the PU2CLR RT buffer before publishing —
+  leading whitespace is stripped, non-printable bytes are folded to
+  spaces, trailing whitespace is trimmed, and an all-empty result is
+  rejected. The UI-level workaround in `Layout-Default.cpp` has been
+  removed; if `radioGetRdsRt()` returns non-empty, the contents are
+  guaranteed to be real printable text.
+
+### Persist
+
+- Schema `v2 → v3` adds four keys: `bw_fm`, `bw_am` (IF-filter index per
+  mode) and `agc_fm`, `agc_am` (AGC/attenuator index per mode). Defaults:
+  `bw_fm = 0` (Auto), `bw_am = 4` (3.0 kHz), `agc_fm = 0` (AGC on),
+  `agc_am = 0` (AGC on). The `v1 → v3` and `v2 → v3` upgrade paths
+  preserve existing `band` / `vol` / `freq<N>` / `theme` values.
+
 ## [2.1.0] - 2026-04-18
 
 ### Changed

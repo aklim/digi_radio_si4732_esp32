@@ -43,7 +43,11 @@ Public API declared in [include/radio.h](../include/radio.h):
 | `radioPollSignal()`                      | Self-rate-limited 500 ms; caches RSSI / SNR / stereo pilot      |
 | `radioGetRssi()` / `radioGetSnr()` / `radioIsStereo()` | Cached values; stereo forced false off-FM         |
 | `radioPollRds()`                         | Self-rate-limited 200 ms; no-op on AM bands; diffed mirror      |
-| `radioGetRdsPs()` / `radioGetRdsRt()`    | Empty on AM or after 10 s sync loss                             |
+| `radioGetRdsPs()` / `radioGetRdsRt()`    | Empty on AM or after 10 s sync loss; RT sanitised at source     |
+| `radioGetBandwidthIdx/Count/Desc*()`     | Active-mode IF filter (FM 5, AM 7 presets); `SetBandwidthIdx`   |
+| `radioGetAgcAttIdx/Max()`, `radioAgcIsOn()` | Per-mode AGC idx (FM 0..27, AM 0..37); `SetAgcAttIdx`        |
+| `radioSeedBandwidthIdx/AgcIdx(fm, idx)`  | Boot-only shadow seeding (no I²C) from NVS                      |
+| `radioApplyCurrentBand()`                | Re-run `setFM/setAM`+BW+AGC+volume on the current band          |
 
 Poll functions return `true` when a cached value has changed since the
 caller last drained the flag, letting the UI drive its dirty flags
@@ -74,6 +78,12 @@ Design notes:
   retired: with the task writing from Core 0 while the UI reads from
   Core 1, returning a raw pointer to a mutable shared buffer is
   unsafe.
+- RT is sanitised **at source** inside `pollRdsLocked()`. The helper
+  `sanitizeRt()` skips leading whitespace, folds non-printable bytes
+  to spaces, right-trims the result, and rejects an all-empty buffer;
+  the UI never has to second-guess whether the RT row is safe to
+  render. The RDS-acceptance gate matches ATS-Mini's triple check
+  (`getRdsReceived && getRdsSync && getRdsSyncFound`).
 - `radioGetCurrentBand()` returns a stable `const Band*` (the table
   lives in `.data` and is never reallocated). Mutable fields inside
   the struct (`currentFreq`) may tear on direct read; use
@@ -106,10 +116,17 @@ release is silent so long presses never emit a stray `BTN_CLICK`.
 
 ## `menu.cpp` — modal menu
 
-Two states today:
+Six navigation states (five pickers + `MENU_TOP`):
 
-- `MENU_TOP` → items `Band` and `Close`.
-- `MENU_BAND` → one row per band in `g_bands[]` plus `< Back`.
+- `MENU_TOP` — top list: `Band / BW / AGC / Theme / Scan / Close`.
+- `MENU_BAND` — one row per band in `g_bands[]` + `< Back`.
+- `MENU_BW` — active-mode IF-filter catalogue (FM 5, AM/SW 7) + `< Back`.
+- `MENU_AGC` — AGC on / off / Att 01..NN (FM 28, AM 38) + `< Back`. The
+  list scrolls so the cursor always stays on-screen.
+- `MENU_THEME` — one row per palette + `< Back`.
+
+All pickers share a generic `drawList()` renderer that handles the
+scrolling viewport, active-row marker, and hint footer.
 
 Public API ([include/menu.h](../include/menu.h)): `menuIsOpen()`,
 `menuOpen()`, `menuClose()`, `menuHandleRotation(delta)`,
@@ -119,9 +136,9 @@ The menu is a full-screen takeover: while open, `main.cpp` skips the
 zone-based dirty-flag pipeline and only calls `menuDraw()` when
 `menuTakeDirty()` returns true. On close, `main.cpp` forces `DIRTY_ALL`
 to repaint the main UI from scratch. ATS-Mini's `CMD_*` namespace
-(`CMD_BAND = 0x1000`, etc. — see their `ats-mini/Menu.h`) is adopted so
-follow-up PRs can add `CMD_VOLUME`, `CMD_STEP`, `CMD_MODE`, `CMD_MEMORY`
-without renaming.
+(`CMD_AGC = 0x1200`, `CMD_BANDWIDTH = 0x1300`, `CMD_SCAN = 0x1B00` —
+see their `ats-mini/Menu.h`) is adopted so follow-up PRs can add
+`CMD_VOLUME`, `CMD_STEP`, `CMD_MODE`, `CMD_MEMORY` without renaming.
 
 ## `persist.cpp` — versioned NVS
 
@@ -130,10 +147,15 @@ the namespace is wiped and defaults re-applied.
 
 | Key         | Type | Meaning                                                |
 |-------------|------|--------------------------------------------------------|
-| `ver`       | u16  | `PERSIST_SCHEMA_VER`                                   |
+| `ver`       | u16  | `PERSIST_SCHEMA_VER` (currently `3`)                   |
 | `band`      | u8   | Current band index                                     |
 | `vol`       | u8   | Global volume 0..`MAX_VOLUME`                          |
 | `freq<N>`   | u16  | Per-band last-tuned frequency in that band's native units (up to 16 bands) |
+| `theme`     | u8   | Active UI palette index (v2+)                          |
+| `bw_fm`     | u8   | FM IF-filter index 0..4 (v3+, default 0 = Auto)        |
+| `bw_am`     | u8   | AM/SW IF-filter index 0..6 (v3+, default 4 = 3.0 kHz)  |
+| `agc_fm`    | u8   | FM AGC/att idx 0..27 (v3+, default 0 = AGC on)         |
+| `agc_am`    | u8   | AM/SW AGC/att idx 0..37 (v3+, default 0 = AGC on)      |
 
 Writes coalesce with a ≥1 s per-key rate limit so rapid encoder rotation
 doesn't hammer flash. `persistFlush()` forces any pending writes out

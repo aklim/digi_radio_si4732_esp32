@@ -52,25 +52,37 @@ bool drawBattery(int x, int y) {
 
     // Per-widget clear — wipes any previous voltage-text artefact to the
     // left of the icon. Rect covers "-3.99V" (Font 2 ≈ 6 px/char) plus
-    // the icon itself plus a tiny safety margin.
-    s.fillRect(x - 52, y, 82, 16, TH.bg);
+    // the icon itself plus the stepped positive terminal out to x+30.
+    s.fillRect(x - 52, y, 84, 16, TH.bg);
 
-    // Outer frame (ATS-Mini uses 28 wide + 1 px contact pip on the right).
-    s.drawSmoothRoundRect(x, y + 1, 3, 2, 28, 14, TH.batt_border, TH.bg);
-    s.fillRect(x + 28, y + 5, 2, 6, TH.batt_border);
+    // Outer frame — 1:1 with ATS-Mini (Battery.cpp:77). drawRoundRect
+    // gives a single-pixel outline with sharp r=3 corners. The earlier
+    // port used drawSmoothRoundRect whose AA halo made the 10-px-tall
+    // fill appear to bleed through the corners.
+    s.drawRoundRect(x, y + 1, 28, 14, 3, TH.batt_border);
 
-    // Inner fill proportional to SOC — 4 discrete levels matches upstream.
+    // Positive terminal: two stacked lines form a stepped nubbin that
+    // visually connects to the frame. Previous port used a flat
+    // fillRect(x+28, y+5, 2, 6) which read as a detached block next to
+    // the frame (the "cut-out" the user spotted).
+    s.drawLine(x + 29, y + 5, x + 29, y + 10, TH.batt_border);
+    s.drawLine(x + 30, y + 6, x + 30, y + 9,  TH.batt_border);
+
+    // Inner fill proportional to SOC — 4 discrete levels, matching
+    // ATS-Mini's 6/12/18/24 px widths. fillRoundRect(r=2) keeps the
+    // fill corners inside the frame's rounded corners instead of
+    // spilling into the AA zone.
     uint8_t  soc     = batteryGetSocPercent();
     uint16_t fillCol = (soc < 25) ? TH.batt_low : TH.batt_full;
     int      w       = soc < 25 ? 6 : soc < 50 ? 12 : soc < 75 ? 18 : 24;
-    s.fillRect(x + 2, y + 3, w, 10, fillCol);
+    s.fillRoundRect(x + 2, y + 3, w, 10, 2, fillCol);
 
     // Voltage label to the left of the icon (right-anchored at the battery).
     char volt[8];
     snprintf(volt, sizeof(volt), "%.2fV", batteryGetVolts());
-    s.setTextDatum(MR_DATUM);
+    s.setTextDatum(TR_DATUM);
     s.setTextColor(TH.batt_voltage, TH.bg);
-    s.drawString(volt, x - 2, y + 8, 2);
+    s.drawString(volt, x - 3, y, 2);
     s.setTextDatum(TL_DATUM);
 
     return true;  // has-voltage path — mirrors upstream's `has_voltage` flag
@@ -89,10 +101,11 @@ void drawBandAndMode(const char *band, const char *mode, int x, int y) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
 
-    // Per-widget clear: band tag is TC-anchored at x with up to ~80 px
-    // on each side, mode box extends ~60 px to the right. Combined rect
-    // covers both with slack.
-    s.fillRect(x - 80, y - 1, 220, 30, TH.bg);
+    // NOTE: no per-widget clear here — matches ATS-Mini (Draw.cpp:117).
+    // The earlier port used `fillRect(x - 80, y - 1, 220, 30)` which
+    // with BAND_OFFSET_X=150 ran to x=290 and wiped the left 6 px of
+    // the battery frame + the whole voltage label every frame. The
+    // fullscreen sprite clear in updateDisplay() handles erase for us.
 
     s.setFreeFont(&Orbitron_Light_24);
     s.setTextDatum(TC_DATUM);
@@ -234,9 +247,12 @@ void drawScale(uint32_t freq) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
 
-    // Wipe the scale zone first so tick marks from a previous band /
-    // freq don't linger.
-    s.fillRect(0, 120, 320, 50, TH.bg);
+    // NOTE: no per-widget clear here — matches ATS-Mini. The caller
+    // (drawLayoutDefault via main.cpp) already wipes the full sprite with
+    // `spr.fillSprite(TH.bg)` at the start of every frame, so a fillRect
+    // over y=120..169 would just redo that work. It used to live here
+    // but was erasing the bottom edge of the sidebar info box (which
+    // runs to y=129, nine pixels into the scale zone).
 
     // Centre pointer (triangle + vertical line dropping into the ticks).
     s.fillTriangle(156, 120, 160, 130, 164, 120, TH.scale_pointer);

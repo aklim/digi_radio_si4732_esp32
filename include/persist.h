@@ -28,7 +28,9 @@
 // Version history:
 //   v1 — initial: band, vol, freq<N>
 //   v2 — adds: theme (active palette index, see Themes.h)
-constexpr uint16_t PERSIST_SCHEMA_VER = 2;
+//   v3 — adds: bw_fm, bw_am (Si4732 IF-filter index per mode),
+//              agc_fm, agc_am (AGC / manual attenuator index per mode)
+constexpr uint16_t PERSIST_SCHEMA_VER = 3;
 
 // Load cached values from NVS and apply the schema-version gate. Safe to
 // call before radioInit(); it does not touch the Si4735. Idempotent.
@@ -58,5 +60,23 @@ void    persistSaveVolume(uint8_t vol);
 // --- Active UI theme (Themes.h catalogue index) ----------------------------
 uint8_t persistLoadTheme();
 void    persistSaveTheme(uint8_t idx);
+
+// --- Per-mode Si4732 IF filter (bandwidth) index ---------------------------
+// FM: 0..4 from kBwFm[] (Auto / 110k / 84k / 60k / 40k), default 0 (Auto).
+// AM/MW/SW: 0..6 from kBwAm[] (1.0k / 1.8k / 2.0k / 2.5k / 3.0k / 4.0k / 6.0k),
+// default 4 (3.0k). See radio.cpp for the catalogue definitions.
+uint8_t persistLoadBandwidthFm();
+void    persistSaveBandwidthFm(uint8_t idx);
+uint8_t persistLoadBandwidthAm();
+void    persistSaveBandwidthAm(uint8_t idx);
+
+// --- Per-mode AGC / manual attenuator index --------------------------------
+// Index 0 = AGC enabled. Index 1..N = AGC disabled + attenuator (index-1).
+// FM range: 0..27. AM range: 0..37. Matches ATS-Mini semantics so the
+// sidebar label ("Att NN") and the chip's AGCIDX register agree.
+uint8_t persistLoadAgcFm();
+void    persistSaveAgcFm(uint8_t idx);
+uint8_t persistLoadAgcAm();
+void    persistSaveAgcAm(uint8_t idx);
 
 #endif  // PERSIST_H
