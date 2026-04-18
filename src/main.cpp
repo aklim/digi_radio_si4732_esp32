@@ -45,11 +45,13 @@
 // tweak is a one-line change. Each alias is the address of the font's
 // GFXfont struct (the same value that Free_Fonts.h macros like FSSB12
 // expand to in the TFT_eSPI examples).
-//   FREQ_FONT       — frequency digits + MHz label (large, bold, sans)
-//   HEADER_FONT     — "FM", "STEREO"/"MONO", "Vol"
-//   LABEL_FONT      — section labels (RSSI, SNR, PS:, footer text)
-//   VALUE_FONT      — numeric values next to the labels
-static const GFXfont* const FREQ_FONT   = &FreeSansBold24pt7b;  // ~34 px cap height
+// The big frequency digits now use TFT_eSPI's built-in Font 7 (a 7-segment
+// digital-clock face, selected by passing `FONT_BIG` as the trailing arg
+// to drawNumber / drawFloat in drawFrequency). The GFX free fonts below
+// cover everything else.
+//   HEADER_FONT  — "FM", "STEREO"/"MONO", "Vol"
+//   LABEL_FONT   — section labels (RSSI, SNR, PS:, footer text)
+//   VALUE_FONT   — numeric values next to the labels
 static const GFXfont* const HEADER_FONT = &FreeSansBold12pt7b;  // ~17 px cap height
 static const GFXfont* const LABEL_FONT  = &FreeSans9pt7b;       // ~13 px cap height
 static const GFXfont* const VALUE_FONT  = &FreeSansBold9pt7b;   // ~13 px cap height, bold
@@ -451,16 +453,24 @@ static void drawFrequency() {
 
     tft.setTextColor(COL_FREQ_TXT, COL_BG);
 
-    // Render the frequency + unit in a single string so the centring stays
-    // right across FM ("102.4 MHz") and AM ("1530 kHz") without
-    // hard-coding a fixed offset for the unit label. radio.cpp owns the
-    // unit choice via the current band's mode.
-    char buf[16];
-    radioFormatFrequency(buf, sizeof(buf));
+    // Font 7 is TFT_eSPI's built-in 7-segment digital-clock bitmap font,
+    // the same face ATS-Mini uses for its big frequency — drawNumber /
+    // drawFloat take the font id as the trailing argument so no
+    // setFreeFont() is needed. Numeric-only (digits + '.' + ':' + '-'),
+    // so the MHz / kHz unit label is painted separately in later steps.
+    const Band* band = radioGetCurrentBand();
+    uint16_t    freq = radioGetFrequency();
+    int16_t     cx   = SCREEN_W / 2;
+    int16_t     cy   = FREQ_Y + FREQ_H / 2;
 
     tft.setTextDatum(MC_DATUM);
-    tft.setFreeFont(FREQ_FONT);
-    tft.drawString(buf, SCREEN_W / 2, FREQ_Y + FREQ_H / 2);
+    if (band->mode == MODE_FM) {
+        // FM stores frequency in 10 kHz units → divide by 100 to get MHz.
+        tft.drawFloat(freq / 100.0f, 2, cx, cy, FONT_BIG);
+    } else {
+        // AM / SW / MW: native kHz, render as integer.
+        tft.drawNumber(freq, cx, cy, FONT_BIG);
+    }
     tft.setTextDatum(TL_DATUM);
 }
 
