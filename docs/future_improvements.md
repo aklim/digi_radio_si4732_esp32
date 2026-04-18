@@ -1,0 +1,85 @@
+# Future Improvements
+
+Living roadmap of ideas beyond the scope that shipped with the initial TFT
+firmware. Each bullet is intentionally short; elaboration happens when an
+item gets picked up. Ideas drawn from the
+[ATS-Mini](https://atsmini.github.io/) and H.-J. Berndt's
+[pocketSI4735DualCoreDecoder](http://www.hjberndt.de/dvb/pocketSI4735DualCoreDecoder.html)
+references plus gaps surfaced while building v1.
+
+## UI / rendering
+
+- Mini-waterfall / bandscope from RSSI history (circular buffer 240×N,
+  colour-mapped per dBµV) — Berndt-style without I/Q.
+- Animated analog S-meter needle as an alternative to the bar.
+- RadioText marquee scroll when the text exceeds the visible width.
+- FreeFonts pack for nicer typography (Orbitron / DSeg7 for frequency,
+  FreeSansBold for labels).
+- Dark / light themes with per-theme colour tables.
+- Battery icon with SOC percentage (blocked on hardware — see below).
+- On-screen "About" / firmware info dialog (long-press encoder or top-bar tap).
+- Frequency-step change affordance on screen (10 kHz / 50 kHz / 100 kHz).
+- Flicker-free redraw via `TFT_eSprite` per zone + DMA push (pattern
+  already proven in `src/test_shield.cpp` phase 5/6).
+
+## Radio features
+
+- AM / SW / LW bands — `radio.cpp` API extension + UI band label.
+- SSB (LSB / USB) with BFO tuning — requires the library's SSB patch-load
+  sequence, bigger lift.
+- Memory presets (Preferences / NVS). ATS-Mini uses `Preferences` with
+  versioning (`VER_SETTINGS`, `VER_BANDS`) — good pattern to copy.
+- Auto-seek (up / down on encoder long-press or touch gesture).
+- Mute toggle (encoder double-click).
+- Squelch by RSSI threshold.
+- RDS clock / date display (CT group) + PTY decode.
+
+## Input
+
+- Long-press encoder → menu system (ATS-Mini pattern).
+- Double-click encoder → secondary action per current mode (e.g. mute, seek).
+- Touch gestures: swipe left / right on freq zone = seek, tap+hold vol zone
+  = mute.
+- Capacitive-touch upgrade path (XPT2046 is resistive — documented for
+  posterity).
+
+## Performance / architecture
+
+- Move radio poll + UI render onto a dedicated `xTaskCreatePinnedToCore`
+  task on Core 1 (Berndt pattern). Core 0 handles Arduino loop + Wi-Fi if
+  ever added.
+- DMA-backed full-screen sprite for the frequency zone to eliminate any
+  residual flicker.
+- Measure and log UI frame time to Serial for regression tracking.
+- Benchmark current vs sprite pipeline under realistic RDS + RSSI load.
+
+## Hardware
+
+- LiPo + voltage divider → ADC → replace `"USB"` footer with a real
+  percentage; add a charge-state glyph if a charger IC is added.
+- External-antenna-switch UI affordance if a relay is added.
+- Headphone-jack detect (GPIO) → display icon + volume policy.
+- PWM-controlled backlight brightness (`TFT_BL` on GPIO 4 already uses
+  LEDC — expose as a setting).
+- Migrate off the ESP32 DevKit to an ESP32-S3 (PSRAM + more RAM) — would
+  unlock LVGL, a higher-FPS waterfall, and parity with ATS-Mini hardware.
+  Document as a separate hardware revision.
+
+## Release / CI
+
+- GitHub Actions job to diff `.text` / `.data` size vs the previous tag and
+  warn on regressions.
+- Upload-to-Release step that posts `User_Setup.h` and `platformio.ini`
+  alongside the binaries for reproducibility.
+- Nightly build of `master` publishing a "dev" artifact (rolling tag).
+- Static analysis (`cppcheck` / `clang-tidy`) on PRs.
+- Automated hardware-in-the-loop smoke test via a USB relay + Serial capture
+  when practical.
+
+## Documentation
+
+- Photos of the assembled TFT variant in [hardware.md](hardware.md).
+- Short video / GIF of the UI in action linked from the top-level README.
+- Troubleshooting section for common shield issues (inverted colours →
+  `TFT_INVERSION_ON`, black screen → backlight GPIO, touch drifting →
+  recalibrate).
