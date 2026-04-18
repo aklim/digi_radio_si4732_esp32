@@ -45,11 +45,44 @@ Public API declared in [include/radio.h](../include/radio.h):
 | `radioPollRds()`                         | Self-rate-limited 200 ms; no-op on AM bands; diffed mirror      |
 | `radioGetRdsPs()` / `radioGetRdsRt()`    | Empty on AM or after 10 s sync loss                             |
 
-Poll functions return `true` when a cached value changed, letting the UI
-layer drive its dirty flags without peeking at library internals.
-`radio.cpp` is not thread-safe; the main loop is the sole caller. The
-Berndt-inspired dual-core task split will add proper synchronization
-when it lands.
+Poll functions return `true` when a cached value has changed since the
+caller last drained the flag, letting the UI drive its dirty flags
+without peeking at library internals. The actual I²C polling is run by
+a dedicated task — see below.
+
+### Threading model (dual-core)
+
+`radio.cpp` owns a FreeRTOS task (`radioTask`, stack 4 KB, priority 1)
+pinned to **Core 0** via `xTaskCreatePinnedToCore` in `radioStart()`.
+It wakes every 20 ms, takes an internal `SemaphoreHandle_t` mutex,
+runs the per-kind rate-limited poll helpers (`pollSignalLocked` /
+`pollRdsLocked`), sets the `g_signalChanged` / `g_rdsChanged` flags on
+any change, and releases. The Arduino `loopTask` continues to run on
+**Core 1** (default) and owns UI + input + persistence.
+
+Every public `radio.cpp` function is thread-safe: each takes the same
+mutex for the duration of its library call or cached-state access.
+`radioSetBand()` / `radioSetFrequency()` / `radioSetVolume()` may
+briefly block (≤ ~20 ms) if they collide with the task mid-poll.
+
+Design notes:
+
+- Single mutex, no command queue — sufficient at the current scale.
+  Every caller takes `g_mutex` uniformly, so no deadlock risk.
+- RDS getters are **copy-into-buffer** (`radioGetRdsPs(buf, size)` /
+  `radioGetRdsRt(buf, size)`). The old `const char*` returns were
+  retired: with the task writing from Core 0 while the UI reads from
+  Core 1, returning a raw pointer to a mutable shared buffer is
+  unsafe.
+- `radioGetCurrentBand()` returns a stable `const Band*` (the table
+  lives in `.data` and is never reallocated). Mutable fields inside
+  the struct (`currentFreq`) may tear on direct read; use
+  `radioGetFrequency()` to get a consistent snapshot.
+- Boot order matters: `radioInit()` creates the mutex and powers up
+  the chip (single caller, Core 1 only). `radioStart()` must be
+  called **after** `radioInit()` to launch the task. Calling any
+  radio function before `radioInit()` is a programming error and
+  will trip an `assert` on the null mutex.
 
 ## `input.cpp` — encoder layer
 
@@ -108,16 +141,21 @@ doesn't hammer flash. `persistFlush()` forces any pending writes out
 
 ## `main.cpp` — top-level
 
-`setup()` order: Serial → `Wire.begin` → `initBacklight()` → `initDisplay()`
-→ `initGauge()` (needle sprite) → `tft.setTouch(TOUCH_CALIBRATION)` →
-splash → 500 ms RC-reset wait → `persistInit()` (load saved state) →
-`radioInit()` → `radioSetBand(saved)` → `encoderInit()` →
+`setup()` order: Serial → `Wire.begin` → `initBacklight()` →
+`initDisplay()` → `initGauge()` (needle sprite) →
+`tft.setTouch(TOUCH_CALIBRATION)` → splash → 500 ms RC-reset wait →
+`persistInit()` (load saved state + seed `g_bands[].currentFreq`) →
+`radioInit()` (creates mutex, powers up chip, tunes) →
+`radioSetBand(saved)` / `radioSetVolume(saved)` → **`radioStart()`**
+(launches Core 0 polling task) → `encoderInit()` →
 `encoderSetBoundsForMode(...)` → first full paint.
 
-`loop()` routes input to the menu when `menuIsOpen()`, otherwise to the
-frequency / volume / mode handlers. Radio polling + needle animation +
-dirty-flag redraw are suppressed while the menu is open — they resume
-on close.
+`loop()` routes input to the menu when `menuIsOpen()`, otherwise to
+the frequency / volume / mode handlers. Radio polling + needle
+animation + dirty-flag redraw are suppressed while the menu is open
+— they resume on close. The radio task keeps polling regardless; when
+the menu closes, the next `radioPollSignal()` / `radioPollRds()` drain
+picks up whatever changed while the UI was busy.
 
 ## Si4732 init sequence (RC-reset-safe)
 

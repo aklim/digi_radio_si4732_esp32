@@ -1,22 +1,29 @@
 // ============================================================================
-// radio.h — Si4732 multi-band receiver wrapper.
+// radio.h — Si4732 multi-band receiver wrapper, dual-core-aware.
 //
 // All Si4732 state (the PU2CLR library instance, RDS mirror buffers, cached
 // signal-quality values, the current band index) is owned by radio.cpp.
 // main.cpp / menu.cpp / persist.cpp talk to the chip only through this
 // header.
 //
-// Threading: not thread-safe. All functions must be called from the Arduino
-// loop task (same core that drives the I2C peripheral). The dual-core split
-// Berndt uses in pocketSI4735DualCoreDecoder will add proper synchronization
-// in a later PR; for now this module assumes a single caller.
+// Threading model:
+//   - A dedicated FreeRTOS task (`radioTaskBody` in radio.cpp, started by
+//     radioStart()) is pinned to Core 0 and drives the Si4735 I2C polling
+//     on its own cadence (signal 500 ms, RDS 200 ms). The Arduino loop
+//     task stays on Core 1 (default) and owns the UI + input.
+//   - Every function in this header is thread-safe: internally each one
+//     takes the radio module's mutex for the duration of its library call
+//     or cached-state access. Callers pay a small lock/unlock cost on
+//     each call; the common case is uncontended.
+//   - radioPollSignal() / radioPollRds() no longer kick I2C themselves —
+//     the task does that. They return "has the cached value changed since
+//     the last call on this caller" so the UI's dirty-flag pipeline works
+//     unchanged.
+//   - radioSetBand / radioSetFrequency / radioSetVolume may briefly block
+//     (<= ~20 ms worst case) if they collide with the task mid-poll.
 //
-// I2C bus: radioInit() assumes Wire.begin(...) has already been called by the
-// caller — this keeps pin choice out of the radio module.
-//
-// Rate limiting: radioPollSignal() and radioPollRds() self-rate-limit; they
-// can safely be called every loop iteration. RDS polling is a no-op on
-// non-FM bands (the chip doesn't decode RDS on AM / MW / SW / LW).
+// I2C bus: radioInit() assumes Wire.begin(...) has already been called by
+// the caller — this keeps pin choice out of the radio module.
 //
 // Frequency units differ by band mode to match the PU2CLR library:
 //   FM bands  : uint16_t in 10 kHz units (e.g. 10240 == 102.40 MHz)
@@ -69,6 +76,13 @@ struct Band {
 
 // Band table, defined in radio.cpp. Index 0 is FM Broadcast, the default
 // on first boot (before NVS has any stored band to restore).
+//
+// Thread-safety note: the pointer returned by radioGetCurrentBand() stays
+// valid for the life of the program (the table lives in .data and is never
+// reallocated). Individual fields may mutate (currentFreq is updated on
+// every tune), so callers that need a stable snapshot of a field should
+// copy it out immediately — or use radioGetFrequency() which goes through
+// the mutex.
 extern Band         g_bands[];
 extern const size_t g_bandCount;
 
@@ -86,10 +100,18 @@ constexpr uint16_t FM_FREQ_STEP    = 10;     // 100 kHz tuning step
 constexpr uint8_t DEFAULT_VOLUME = 30;
 constexpr uint8_t MAX_VOLUME     = 63;
 
-// Power up the Si4732 and tune it to the band previously saved in NVS (or
-// index 0 / FM Broadcast on a fresh device). The chip must already be out of
-// hardware reset (RC circuit). I2C (Wire) must already be initialised.
+// --- Lifecycle --------------------------------------------------------------
+
+// Power up the Si4732, create the radio mutex, and tune the chip to
+// band[g_bandIdx] at its currentFreq. Does NOT start the radio task — call
+// radioStart() after this completes so the task doesn't race with the
+// caller's setup sequence.
 void radioInit();
+
+// Create and launch the radio polling task pinned to Core 0. Must be called
+// exactly once, after radioInit() has returned. From this point on any
+// radio.cpp function is safe to call from any task.
+void radioStart();
 
 // --- Band control -----------------------------------------------------------
 // Switch the active band. Saves the outgoing band's currentFreq, reconfigures
@@ -119,18 +141,26 @@ uint8_t radioGetVolume();
 void radioFormatFrequency(char* buf, size_t bufsize);
 
 // --- Signal / RDS -----------------------------------------------------------
-// Poll RSSI / SNR / stereo pilot. Self-rate-limited to 500 ms; callers can
-// invoke this every loop iteration. Returns true when any cached value
-// changed during this call — useful as a dirty-flag trigger for the UI.
+// Drain the "signal changed" flag set by the radio task. Returns true once
+// after a new RSSI / SNR / stereo sample arrived and clears the flag.
+// Callers should treat this as "should I repaint the signal UI now?".
 bool    radioPollSignal();
 uint8_t radioGetRssi();       // 0..127 dBuV
 uint8_t radioGetSnr();        // dB
 bool    radioIsStereo();      // pilot bit; always false on AM bands
 
-// Poll RDS. Self-rate-limited to 200 ms. Returns true when the local PS or RT
-// mirror changed. No-op on non-FM bands (returns false without touching I2C).
-bool        radioPollRds();
-const char* radioGetRdsPs();  // up to 8 chars, "" when no sync / stale / AM
-const char* radioGetRdsRt();  // up to 64 chars, "" when no sync / stale / AM
+// Drain the "RDS changed" flag set by the radio task. Returns true once
+// after new PS / RT data arrived (or existing text was cleared after
+// 10 s without sync). No-op semantics on non-FM bands.
+bool radioPollRds();
+
+// Copy the current PS (up to 8 chars + NUL) / RT (up to 64 chars + NUL)
+// into the caller's buffer. Both getters copy under the radio mutex so
+// the UI can call them from Core 1 while the radio task (Core 0) may be
+// writing. Empty string on no-sync, stale, or AM band. `bufsize` must be
+// at least 1; the function always NUL-terminates and writes at most
+// `bufsize-1` characters.
+void radioGetRdsPs(char* buf, size_t bufsize);
+void radioGetRdsRt(char* buf, size_t bufsize);
 
 #endif  // RADIO_H

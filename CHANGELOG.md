@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 ## [Unreleased]
 
 ### Added
+- **Dual-core radio task.** Si4732 signal (500 ms) and RDS (200 ms)
+  polling moved to a dedicated FreeRTOS task pinned to Core 0, leaving
+  the Arduino `loopTask` on Core 1 to own UI + input + persistence
+  without I²C-induced stalls. A single `SemaphoreHandle_t` mutex inside
+  `radio.cpp` serialises every Si4735 library call, so `radioSetBand`
+  / `radioSetFrequency` / `radioSetVolume` from the UI coexist safely
+  with the task's polling. New `radioStart()` entrypoint launches the
+  task; `setup()` calls it after `radioInit()` returns. Pattern drawn
+  from H.-J. Berndt's
+  [pocketSI4735DualCoreDecoder](http://www.hjberndt.de/dvb/pocketSI4735DualCoreDecoder.html).
+  (docs/future_improvements.md → Performance / architecture → dual-core)
+
 - TFT variant: **multi-band receiver**. New `Band` table in `radio.cpp`
   with four bands — FM Broadcast (87.0–108.0 MHz), MW (520–1710 kHz),
   SW 41 m (7100–7300 kHz), SW 31 m (9400–9900 kHz). `radioSetBand(idx)`
@@ -41,13 +53,20 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   Enabled via `LOAD_GFXFF` in `include/User_Setup.h`.
 
 ### Changed
-- Shared `radio.cpp` / `input.cpp` modules evolved to multi-band + long-press
-  semantics. `encoderPollButton()` now returns a `ButtonEvent` enum
-  instead of `bool`; callers must handle `BTN_CLICK` and optionally
-  `BTN_LONG_PRESS`.
-- `radioSetFrequency()` clamps to the current band's min/max and updates
-  its `Band::currentFreq` field so band-switch-round-trip preserves
-  tune.
+- `radio.h`: RDS getters are now **copy-into-buffer**
+  (`radioGetRdsPs(char*, size_t)` / `radioGetRdsRt(char*, size_t)`).
+  The previous `const char*` returning form was unsafe once the radio
+  task started writing the mirror buffers on Core 0. Affects callers
+  in `main.cpp::drawRds`.
+- `radio.h`: `radioPollSignal()` / `radioPollRds()` now drain
+  change-flags set by the task — they no longer kick I²C themselves.
+  Semantics from the caller's perspective are unchanged (returns true
+  when the cached value moved since the last drain).
+- `encoderPollButton()` returns a `ButtonEvent` enum
+  (`BTN_NONE` / `BTN_CLICK` / `BTN_LONG_PRESS`) instead of `bool`.
+- `radioSetFrequency()` clamps to the current band's min/max and
+  updates its `Band::currentFreq` field so band-switch-round-trip
+  preserves tune.
 
 ### Removed
 - **OLED variant retired.** The legacy 128×64 SSD1315 firmware
