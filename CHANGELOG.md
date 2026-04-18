@@ -49,10 +49,16 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   its `Band::currentFreq` field so band-switch-round-trip preserves
   tune.
 
-### Deprecated / Out of scope (see docs/future_improvements.md)
-- OLED variant (`esp32dev`, `src/main.cpp`) is no longer actively
-  supported. The shared-code changes above likely break its build;
-  the legacy env will be removed in a future PR rather than fixed.
+### Removed
+- **OLED variant retired.** The legacy 128×64 SSD1315 firmware
+  (`src/main.cpp` + Adafruit SSD1306 / GFX dependencies) has been
+  deleted. All development now targets the Waveshare 2.8" ST7789V TFT
+  shield. The `esp32dev_tft` PlatformIO env + `main_tft.cpp` /
+  `ui_layout_tft.h` file names have been consolidated into a single
+  `esp32dev` env, `src/main.cpp`, and `include/ui_layout.h` — the
+  `_tft` suffix served to disambiguate variants that no longer exist.
+  The release workflow publishes a single `digi_radio-vX.Y.Z-esp32dev.{bin,elf}`
+  artifact per tag.
 
 ### Notes
 - The new frequency font is anti-aliased but smaller than the legacy

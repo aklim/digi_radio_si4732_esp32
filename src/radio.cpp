@@ -5,14 +5,14 @@
 // handles hardware reset at power-on, so the PU2CLR SI4735 library's normal
 // setup() -> reset() flow is bypassed — we drive setPowerUp() + radioPowerUp()
 // directly over I2C, matching the sequence that has been running reliably on
-// the OLED firmware since v1.0.0.
+// the firmware since v1.0.0.
 //
 // Band layout ported from ATS-Mini's Common.h + Menu.cpp (see
 // https://github.com/esp32-si4732/ats-mini). We start with four bands (FM
 // Broadcast, MW, SW 41m, SW 31m); LW and additional SW segments plus SSB
 // are tracked separately in docs/future_improvements.md and will land in
-// follow-up PRs. Index 0 is FM Broadcast so the OLED firmware (which never
-// calls radioSetBand()) gets its historical behaviour for free.
+// follow-up PRs. Index 0 is FM Broadcast so first-boot state (before NVS
+// has a saved band) is identical to the v1 single-band behaviour.
 //
 // RDS mirror buffers: the library exposes getRdsText0A / getRdsText2A as
 // char* into shared buffers that can change under us mid-read. We keep local

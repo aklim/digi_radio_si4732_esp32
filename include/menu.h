@@ -2,7 +2,7 @@
 // menu.h — full-screen modal menu for the TFT firmware.
 //
 // The menu is a takeover UI: while open it owns the entire screen and
-// consumes all encoder input. main_tft.cpp routes rotation + click events
+// consumes all encoder input. main.cpp routes rotation + click events
 // into the functions below when menuIsOpen() returns true; on close the
 // main UI repaints from scratch (dirtyFlags = DIRTY_ALL).
 //
@@ -43,7 +43,7 @@ bool menuIsOpen();
 void menuOpen();
 void menuClose();
 
-// Input handlers. Called by main_tft.cpp while menuIsOpen() is true.
+// Input handlers. Called by main.cpp while menuIsOpen() is true.
 //   menuHandleRotation(delta) — delta > 0 moves the highlight down by delta
 //                               items, delta < 0 moves it up. We receive a
 //                               delta rather than an absolute encoder value

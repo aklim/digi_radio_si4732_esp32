@@ -7,8 +7,11 @@ not interfere with the main radio firmware.
 
 ## Purpose
 
-The shield replaces the SSD1315 OLED used by the main firmware. Before
-rewriting the radio UI for a larger color display we needed to confirm:
+This env exists to validate the Waveshare 2.8" TFT shield hardware
+independently of the radio firmware. Retained from the original
+bring-up — the shipping firmware now drives the shield directly. Before
+rewriting the radio UI for the larger colour display we needed to
+confirm:
 
 1. The panel powers up and responds over SPI.
 2. Colors, fonts, primitives, and PWM backlight work.

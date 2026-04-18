@@ -6,8 +6,9 @@ roadmap. It covers only the current behaviour — future additions
 (step selector, memory presets, seek, SSB / BFO, settings, themes, …)
 will extend this file rather than replace it.
 
-Scope is TFT variant only (`esp32dev_tft`). The OLED variant is being
-retired; see [CHANGELOG.md](../CHANGELOG.md).
+Single product env — the 128×64 SSD1315 OLED build has been retired.
+Everything below describes the `esp32dev` firmware running on the
+Waveshare 2.8" TFT shield.
 
 ## Bands
 
@@ -97,12 +98,12 @@ for a future sleep path).
 - [include/radio.h](../include/radio.h) /
   [src/radio.cpp](../src/radio.cpp) — `Band` struct, band table,
   `radioSetBand()`, `radioFormatFrequency()`.
-- [src/main_tft.cpp](../src/main_tft.cpp) — routing between main UI and
+- [src/main.cpp](../src/main.cpp) — routing between main UI and
   menu, persistence calls on user actions, mode-aware header / footer.
 
 ## Verification checklist
 
-After flashing `pio run -e esp32dev_tft -t upload`:
+After flashing `pio run -e esp32dev -t upload`:
 
 1. Boot: splash, then main UI on the last-saved band + freq + volume
    (FM Broadcast @ 102.40 MHz, volume 30 on first boot).

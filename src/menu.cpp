@@ -13,7 +13,7 @@
 //       ├── click a band row → radioSetBand(idx) + close menu
 //       └── click "Back"     → MENU_TOP
 //
-// Rendering model: every time menuTakeDirty() returns true, main_tft.cpp
+// Rendering model: every time menuTakeDirty() returns true, main.cpp
 // calls menuDraw(tft) which repaints the whole screen. No per-row partial
 // updates — the menu is modal, small, and infrequent, so keeping the
 // drawing code dumb is worth the extra pixels pushed.
@@ -21,7 +21,7 @@
 // Styling: reuses the GFX free-font pipeline enabled in PR #3. Header row
 // in FreeSansBold12pt7b, list rows in FreeSansBold12pt7b (normal) or
 // FreeSansBold12pt7b with inverted colours (highlight). Colours live in
-// ui_layout_tft.h.
+// ui_layout.h.
 // ============================================================================
 
 #include "menu.h"
@@ -35,7 +35,7 @@
 #include "radio.h"
 #include "persist.h"
 #include "input.h"
-#include "ui_layout_tft.h"
+#include "ui_layout.h"
 
 namespace {
 
@@ -67,7 +67,7 @@ constexpr int TOP_COUNT = sizeof(TOP_ITEMS) / sizeof(TOP_ITEMS[0]);
 int bandItemCount() { return (int)g_bandCount + 1; }
 bool  bandItemIsBack(int idx) { return idx >= (int)g_bandCount; }
 
-// --- Layout constants (kept local since ui_layout_tft.h is zone-focused) ---
+// --- Layout constants (kept local since ui_layout.h is zone-focused) ---
 constexpr int MENU_ROW_H      = 30;
 constexpr int MENU_ROW_PAD_X  = 12;
 constexpr int MENU_TITLE_Y    = 16;     // top padding from screen edge
@@ -197,7 +197,7 @@ void menuOpen() {
 void menuClose() {
     g_state  = MENU_STATE_CLOSED;
     g_cursor = 0;
-    // Intentionally leave g_dirty as-is — main_tft.cpp doesn't consult
+    // Intentionally leave g_dirty as-is — main.cpp doesn't consult
     // menuTakeDirty() when menuIsOpen() is false; it forces DIRTY_ALL on
     // close to repaint the main UI instead.
 }

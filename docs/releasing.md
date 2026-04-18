@@ -40,10 +40,9 @@ artifacts attached.
    ```
 6. Once the workflow finishes, verify the
    [Releases page](https://github.com/aklim/digi_radio_si4732_esp32/releases)
-   now shows `vX.Y.Z` with **both** products' `.bin` and `.elf` attached:
-   `digi_radio-vX.Y.Z-esp32dev.{bin,elf}` (OLED variant) and
-   `digi_radio-vX.Y.Z-esp32dev_tft.{bin,elf}` (TFT variant). The
-   `shield_test` env is intentionally not built by the workflow.
+   now shows `vX.Y.Z` with `digi_radio-vX.Y.Z-esp32dev.{bin,elf}`
+   attached. The `shield_test` env is intentionally not built by the
+   workflow.
 7. Optionally, replace the auto-generated release notes with the matching
    CHANGELOG section:
    ```bash
@@ -69,9 +68,7 @@ the bundled artifact:
 
 ```bash
 gh release download vX.Y.Z --pattern '*.elf' --dir /tmp
-for env in esp32dev esp32dev_tft; do
-    strings "/tmp/digi_radio-vX.Y.Z-${env}.elf" | grep 'FW='
-done
-# Expected (once per env):
+strings "/tmp/digi_radio-vX.Y.Z-esp32dev.elf" | grep 'FW='
+# Expected:
 #   FW=vX.Y.Z commit=<hash> built=YYYY-MM-DD
 ```
