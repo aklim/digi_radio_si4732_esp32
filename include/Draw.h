@@ -69,6 +69,8 @@ void drawStationName(const char *name, int x, int y);
 void drawSMeter(int strength, int x, int y);
 void drawStereoIndicator(int x, int y, bool stereo);
 void drawRadioText(int y, int ymax);
+void drawScale(uint32_t freq);
+void drawSideBar(int x, int y, int sx);
 
 // --- Layout orchestrators ---------------------------------------------------
 // Full-screen repaint (draws directly to the provided TFT, no sprite). Call

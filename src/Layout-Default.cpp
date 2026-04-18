@@ -89,14 +89,27 @@ void drawLayoutDefault() {
     radioGetRdsPs(ps, sizeof(ps));
     drawStationName(ps, RDS_OFFSET_X, RDS_OFFSET_Y);
 
+    // Left sidebar — info box with Step/BW/AGC/Vol/PI/Time rows.
+    // Upstream's x/y offsets land a 86×110 box at (0, 18). Rendered
+    // before the S-meter overlays so the meter's icon column stays on
+    // top of the box's rounded corner.
+    drawSideBar(MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+
     // S-meter (top edge) + stereo pilot split.
     int strength = strengthFromRssi(radioGetRssi());
     drawSMeter(strength, METER_OFFSET_X, METER_OFFSET_Y);
     drawStereoIndicator(METER_OFFSET_X, METER_OFFSET_Y,
                         (band->mode == MODE_FM) && radioIsStereo());
 
-    // Bottom status row: drawRadioText handles its own per-widget clear
-    // and no-op-when-empty, so it runs every frame regardless. The band
-    // scale (Step 5) will claim this slot when RT is absent.
-    drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
+    // Bottom area (y >= 120): band scale when no RadioText is playing,
+    // otherwise the single-line RT readout. Upstream decides the same
+    // way — scale is the default, RT takes over when an RDS stream is
+    // actively transmitting radio text.
+    char rt[65];
+    radioGetRdsRt(rt, sizeof(rt));
+    if (rt[0]) {
+        drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
+    } else {
+        drawScale(radioGetFrequency());
+    }
 }

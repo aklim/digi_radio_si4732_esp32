@@ -224,6 +224,133 @@ void drawStereoIndicator(int x, int y, bool stereo) {
 // segment). We pass a single RT string from the radio mirror, which
 // renders as one page. EIBI / ProgramInfo fallback is not ported yet.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Band scale — horizontal ruler under the frequency readout with tick
+// marks + numeric labels at every 100 kHz. Ported 1:1 from ATS-Mini
+// with our radio API substituted for currentMode / getCurrentBand().
+// ---------------------------------------------------------------------------
+void drawScale(uint32_t freq) {
+    if (!g_tft) return;
+    TFT_eSPI &s = *g_tft;
+
+    // Wipe the scale zone first so tick marks from a previous band /
+    // freq don't linger.
+    s.fillRect(0, 120, 320, 50, TH.bg);
+
+    // Centre pointer (triangle + vertical line dropping into the ticks).
+    s.fillTriangle(156, 120, 160, 130, 164, 120, TH.scale_pointer);
+    s.drawLine(160, 130, 160, 169, TH.scale_pointer);
+
+    s.setTextDatum(MC_DATUM);
+    s.setTextColor(TH.scale_text, TH.bg);
+
+    // Extra frequencies drawn beyond the screen edges so ticks do not
+    // pop in / out as the tune sweeps.
+    int16_t slack = 3;
+
+    // Pixel-offset of the centre tick so the band glides smoothly as
+    // frequency crosses 10 kHz boundaries.
+    int16_t offset = ((freq % 10) / 10.0f + slack) * 8;
+
+    // First tick to render — 20 ticks to the left of centre, plus slack.
+    freq = freq / 10 - 20 - slack;
+
+    const Band *band    = radioGetCurrentBand();
+    uint32_t    minFreq = band->minFreq / 10;
+    uint32_t    maxFreq = band->maxFreq / 10;
+
+    for (int i = 0; i < (slack + 41 + slack); i++, freq++) {
+        int16_t x = i * 8 - offset;
+        if (freq < minFreq || freq > maxFreq) continue;
+
+        uint16_t lineColor =
+            (i == 20) && (!offset || (!(freq % 5) && offset == 1))
+                ? TH.scale_pointer
+                : TH.scale_line;
+
+        if ((freq % 10) == 0) {
+            s.drawLine(x, 169, x, 150, lineColor);
+            s.drawLine(x + 1, 169, x + 1, 150, lineColor);
+            if (band->mode == MODE_FM) {
+                s.drawFloat(freq / 10.0f, 1, x, 140, 2);
+            } else if (freq >= 100) {
+                s.drawFloat(freq / 100.0f, 3, x, 140, 2);
+            } else {
+                s.drawNumber(freq * 10, x, 140, 2);
+            }
+        } else if ((freq % 5) == 0) {
+            s.drawLine(x, 169, x, 155, lineColor);
+            s.drawLine(x + 1, 169, x + 1, 155, lineColor);
+        } else {
+            s.drawLine(x, 169, x, 160, lineColor);
+        }
+    }
+    s.setTextDatum(TL_DATUM);
+}
+
+// ---------------------------------------------------------------------------
+// Left sidebar — info box with Step / BW / AGC / Vol / PI / Time rows.
+// drawInfo is the default content (no overlay menu active). BW / AGC /
+// PI rows currently show "--" placeholders; they light up in Step 6 when
+// radio.cpp grows the matching getters.
+// ---------------------------------------------------------------------------
+static void drawInfo(int x, int y, int sx) {
+    if (!g_tft) return;
+    TFT_eSPI &s = *g_tft;
+
+    s.setTextDatum(ML_DATUM);
+    s.setTextColor(TH.box_text, TH.box_bg);
+
+    // Rounded border + inner fill, same geometry upstream uses (box is
+    // 76+sx wide, 110 tall, 2-px double-stroke border).
+    s.fillSmoothRoundRect(1 + x, 1 + y, 76 + sx, 110, 4, TH.box_border);
+    s.fillSmoothRoundRect(2 + x, 2 + y, 74 + sx, 108, 4, TH.box_bg);
+
+    // Upstream anchors every row at (y + 64) and steps ±16 per slot.
+    // Rows -3..+2 → y=16, 32, 48, 64, 80, 96 (relative to box origin).
+    const int row = 64 + y;
+
+    // Step: native-unit value → short description.
+    char stepBuf[10];
+    const Band *band = radioGetCurrentBand();
+    uint16_t stepUnits = band->step;  // 10 kHz units on FM, 1 kHz on AM/SW
+    if (band->mode == MODE_FM) {
+        snprintf(stepBuf, sizeof(stepBuf), "%luk", (unsigned long)stepUnits * 10u);
+    } else {
+        snprintf(stepBuf, sizeof(stepBuf), "%luk", (unsigned long)stepUnits);
+    }
+    s.drawString("Step:", 6 + x, row - 3 * 16, 2);
+    s.drawString(stepBuf, 48 + x, row - 3 * 16, 2);
+
+    s.drawString("BW:",  6 + x, row - 2 * 16, 2);
+    s.drawString("--",  48 + x, row - 2 * 16, 2);
+
+    s.drawString("AGC:", 6 + x, row - 1 * 16, 2);
+    s.drawString("--",  48 + x, row - 1 * 16, 2);
+
+    // Volume — real value. Upstream has mute/squelch states that change
+    // the colour + text; those join in a later step.
+    s.drawString("Vol:", 6 + x, row + 0 * 16, 2);
+    s.drawNumber(radioGetVolume(), 48 + x, row + 0 * 16, 2);
+
+    s.drawString("PI:",  6 + x, row + 1 * 16, 2);
+    s.drawString("--",  48 + x, row + 1 * 16, 2);
+
+    s.drawString("Time:", 6 + x, row + 2 * 16, 2);
+    s.drawString("--:--", 48 + x, row + 2 * 16, 2);
+
+    s.setTextDatum(TL_DATUM);
+}
+
+void drawSideBar(int x, int y, int sx) {
+    // Upstream switches between a dozen overlay screens (Menu, Settings,
+    // Step, BW, Theme, ...) based on currentCmd. Our firmware routes menu
+    // UI through the separate modal pipeline in menu.cpp, so the sidebar
+    // only ever shows the info box here. Overlay states can be ported
+    // later if we also move menu.cpp under the drawLayoutDefault umbrella.
+    drawInfo(x, y, sx);
+}
+
 void drawRadioText(int y, int ymax) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
