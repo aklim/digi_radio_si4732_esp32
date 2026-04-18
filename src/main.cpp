@@ -286,8 +286,11 @@ void loop() {
         // Advance the bandscope sweep one sample per loop iteration. Each
         // scanTick takes ~60-80 ms (tune + settle + quality read) so the
         // full 200-sample sweep completes in ~15 s. Paint after every
-        // sample so the graph fills in progressively.
-        if (scanIsActive() && scanTick()) {
+        // sample so the graph fills in progressively; always repaint on
+        // the transition-to-DONE tick too (scanTick() returns false for
+        // that one but the last sample still needs to show).
+        if (scanIsActive()) {
+            scanTick();
             markDirty(DIRTY_ALL);
         }
         if (radioPollSignal()) {

@@ -78,12 +78,16 @@ void scanStart(uint16_t centerFreq, uint16_t step) {
     memset(g_data, 0, sizeof(g_data));
 
     radioScanEnter();
+    Serial.printf("[scan] started center=%u step=%u start=%u settle=%ums\n",
+                  (unsigned)centerFreq, (unsigned)g_step,
+                  (unsigned)g_startFreq, (unsigned)g_settleMs);
 }
 
 bool scanTick() {
     if (g_status != SCAN_RUN) return false;
     if (g_count >= SCAN_POINTS) {
         g_status = SCAN_DONE;
+        Serial.println(F("[scan] complete"));
         return false;
     }
 
@@ -91,6 +95,7 @@ bool scanTick() {
     const Band *band = radioGetCurrentBand();
     if (freq < band->minFreq || freq > band->maxFreq) {
         g_status = SCAN_DONE;
+        Serial.println(F("[scan] ended (band edge)"));
         return false;
     }
 
@@ -103,6 +108,14 @@ bool scanTick() {
     g_maxRssi = umax(rssi, g_maxRssi);
     g_minSnr  = umin(snr, g_minSnr);
     g_maxSnr  = umax(snr, g_maxSnr);
+
+    // Progress log every 20 samples — enough to confirm the sweep is
+    // actually running without drowning the serial console.
+    if ((g_count % 20) == 0) {
+        Serial.printf("[scan] %u/%u freq=%u rssi=%u snr=%u\n",
+                      (unsigned)g_count, (unsigned)SCAN_POINTS,
+                      (unsigned)freq, (unsigned)rssi, (unsigned)snr);
+    }
 
     if (++g_count >= SCAN_POINTS) g_status = SCAN_DONE;
     return g_status == SCAN_RUN;
@@ -122,20 +135,28 @@ void scanReset() {
     g_status = SCAN_OFF;
 }
 
+// Progressive readout: samples become visible as soon as they are
+// collected (idx < g_count), instead of blocking until SCAN_DONE. This
+// lets drawScanGraphs paint the bars growing across the zone as the
+// sweep rolls left-to-right, confirming visually that the sweep is
+// alive even before it finishes.
+
 float scanGetRSSI(uint16_t freq) {
-    if (g_status != SCAN_DONE) return 0.0f;
+    if (g_status == SCAN_OFF) return 0.0f;
     if (freq < g_startFreq) return 0.0f;
     uint32_t idx = (uint32_t)(freq - g_startFreq) / g_step;
     if (idx >= g_count) return 0.0f;
-    uint8_t range = g_maxRssi >= g_minRssi ? (g_maxRssi - g_minRssi + 1) : 1;
+    if (g_maxRssi <= g_minRssi) return 0.0f;
+    uint8_t range = g_maxRssi - g_minRssi + 1;
     return (g_data[idx].rssi - g_minRssi) / (float)range;
 }
 
 float scanGetSNR(uint16_t freq) {
-    if (g_status != SCAN_DONE) return 0.0f;
+    if (g_status == SCAN_OFF) return 0.0f;
     if (freq < g_startFreq) return 0.0f;
     uint32_t idx = (uint32_t)(freq - g_startFreq) / g_step;
     if (idx >= g_count) return 0.0f;
-    uint8_t range = g_maxSnr >= g_minSnr ? (g_maxSnr - g_minSnr + 1) : 1;
+    if (g_maxSnr <= g_minSnr) return 0.0f;
+    uint8_t range = g_maxSnr - g_minSnr + 1;
     return (g_data[idx].snr - g_minSnr) / (float)range;
 }
