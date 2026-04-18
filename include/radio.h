@@ -1,10 +1,10 @@
 // ============================================================================
-// radio.h — Si4732 multi-band receiver wrapper shared by the TFT (and legacy
-//           OLED) firmwares.
+// radio.h — Si4732 multi-band receiver wrapper.
 //
 // All Si4732 state (the PU2CLR library instance, RDS mirror buffers, cached
 // signal-quality values, the current band index) is owned by radio.cpp.
-// main_tft.cpp / main.cpp talk to the chip only through this header.
+// main.cpp / menu.cpp / persist.cpp talk to the chip only through this
+// header.
 //
 // Threading: not thread-safe. All functions must be called from the Arduino
 // loop task (same core that drives the I2C peripheral). The dual-core split
@@ -67,9 +67,8 @@ struct Band {
     uint16_t    step;           // native units per encoder detent
 };
 
-// Band table, defined in radio.cpp. Index 0 is FM Broadcast so callers that
-// haven't opted into multi-band (OLED's main.cpp) keep their existing
-// behaviour without changes.
+// Band table, defined in radio.cpp. Index 0 is FM Broadcast, the default
+// on first boot (before NVS has any stored band to restore).
 extern Band         g_bands[];
 extern const size_t g_bandCount;
 

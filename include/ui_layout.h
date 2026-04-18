@@ -1,8 +1,8 @@
 // ============================================================================
-// ui_layout_tft.h — UI coordinates, sizes, colors, and fonts for the TFT
-// (Waveshare 2.8" ST7789V, 240x320 portrait, rotation 0).
+// ui_layout.h — UI coordinates, sizes, colors, and fonts for the Waveshare
+//               2.8" ST7789V TFT (240x320 portrait, rotation 0).
 //
-// Keeping magic numbers out of main_tft.cpp means docs/display_tft.md can
+// Keeping magic numbers out of main.cpp means docs/display_tft.md can
 // reference these constants by name and the two stay in sync as the layout
 // evolves. Zones are stacked vertically top-to-bottom:
 //
@@ -23,8 +23,8 @@
 //   y=320 +--------------------------------+
 // ============================================================================
 
-#ifndef UI_LAYOUT_TFT_H
-#define UI_LAYOUT_TFT_H
+#ifndef UI_LAYOUT_H
+#define UI_LAYOUT_H
 
 #include <stdint.h>
 #include <TFT_eSPI.h>   // for TFT_* color macros
@@ -38,10 +38,10 @@ constexpr int16_t SCREEN_H = 320;
 // useful when the shield is mounted in a case that cannot be rotated. Set
 // to false when the shield is mounted right-side-up.
 //
-// Touch consequence: the hard-coded XPT2046 calibration in main_tft.cpp was
+// Touch consequence: the hard-coded XPT2046 calibration in main.cpp was
 // captured with the panel in rotation 0, and TFT_eSPI's getTouch() does NOT
 // rotate coordinates on its own — it just applies the stored calibration.
-// main_tft.cpp's handleTouch() therefore manually mirrors the touch point
+// main.cpp's handleTouch() therefore manually mirrors the touch point
 // (x -> W-1-x, y -> H-1-y) when this flag is true so finger taps still land
 // on the visually-correct zone. If taps ever feel inverted, toggle this.
 constexpr bool DISPLAY_FLIPPED = true;
@@ -72,7 +72,7 @@ constexpr uint16_t COL_VERSION     = TFT_YELLOW;
 
 // --- Fonts (TFT_eSPI built-ins loaded via User_Setup.h) --------------------
 // Legacy bitmap-font aliases, kept as fallbacks during the FreeFonts
-// rollout. main_tft.cpp now routes every drawString() through the
+// rollout. main.cpp now routes every drawString() through the
 // Adafruit-GFX free fonts (FSSB12, FSS9, FSSB9, FMB24) declared near the
 // draw functions — these constants are retained for any code that still
 // needs a bitmap-font identifier and for quick A/B comparison.
@@ -107,7 +107,7 @@ constexpr uint8_t RDS_RT_MAX_CHARS = 38;     // FONT2 fits ~38 chars at 240 px
 
 // --- S-meter zone ----------------------------------------------------------
 // The first row of the meter zone now hosts an analog needle gauge rendered
-// through a TFT_eSprite (see main_tft.cpp, section "Needle S-meter"). The
+// through a TFT_eSprite (see main.cpp, section "Needle S-meter"). The
 // numeric dBuV value and the SNR row on the right are unchanged.
 //
 // Legacy METER_BAR_* constants are retained so a rollback to the flat bar
@@ -176,4 +176,4 @@ constexpr unsigned long TOUCH_DEBOUNCE_MS = 200;
 // --- Power source (knob — no battery hardware in v1, see future_improvements.md)
 constexpr const char* POWER_SOURCE = "USB";
 
-#endif  // UI_LAYOUT_TFT_H
+#endif  // UI_LAYOUT_H

@@ -2,8 +2,8 @@
 // input.cpp — rotary encoder wrapper (pins + ISR + acceleration + state).
 //
 // All pin numbers, ISR handling, and the AiEsp32RotaryEncoder instance are
-// owned by this translation unit. Both main.cpp (OLED) and main_tft.cpp (TFT)
-// talk to the encoder through the functions declared in input.h.
+// owned by this translation unit. main.cpp + menu.cpp talk to the encoder
+// through the functions declared in input.h.
 //
 // Long-press handling lives here too: the underlying library only exposes a
 // click-on-release signal, so encoderPollButton() runs its own small state

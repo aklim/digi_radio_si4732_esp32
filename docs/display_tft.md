@@ -1,11 +1,10 @@
-# TFT Display Variant
+# TFT Display
 
-`env:esp32dev_tft` is the second product firmware in this repository. It drives
-a Waveshare 2.8" TFT Touch Shield Rev 2.1 (ST7789V 240×320 + XPT2046 resistive
-touch) via Bodmer's [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) library.
-The underlying Si4732 radio and rotary-encoder logic are shared with the OLED
-firmware — they live in `src/radio.cpp` and `src/input.cpp`. Only the display
-backend and the UI layout differ between the two variants.
+`env:esp32dev` drives a Waveshare 2.8" TFT Touch Shield Rev 2.1
+(ST7789V 240×320 + XPT2046 resistive touch) via Bodmer's
+[TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) library. This is the
+only product display — the earlier SSD1315 OLED variant has been
+retired.
 
 The shield bring-up fixture (`env:shield_test`, `src/test_shield.cpp`) is a
 separate environment used only for hardware validation and is not published
@@ -14,9 +13,9 @@ by the release workflow. See [display_shield_test.md](display_shield_test.md).
 ## Build and flash
 
 ```bash
-pio run -e esp32dev_tft                   # build
-pio run -e esp32dev_tft -t upload         # build + flash
-pio device monitor -b 115200 -e esp32dev_tft
+pio run -e esp32dev                   # build
+pio run -e esp32dev -t upload         # build + flash
+pio device monitor -b 115200 -e esp32dev
 ```
 
 On first boot the splash screen shows the firmware version (from
@@ -27,19 +26,20 @@ during the shield bring-up.
 
 ### Physical orientation
 
-`DISPLAY_FLIPPED` in [include/ui_layout_tft.h](../include/ui_layout_tft.h)
+`DISPLAY_FLIPPED` in [include/ui_layout.h](../include/ui_layout.h)
 chooses the panel orientation. `true` rotates the UI 180° (useful when the
 shield is mounted in a case that cannot be turned over); `false` is
 right-side-up portrait. Defaults to `true` for the current enclosure. When
-the flag is `true`, `main_tft.cpp` also mirrors touch coordinates
+the flag is `true`, `main.cpp` also mirrors touch coordinates
 (`x → W-1-x`, `y → H-1-y`) so finger taps still hit the visually-correct
 zone — the pinned touch calibration was captured in rotation 0 and
 TFT_eSPI's `getTouch()` does not compensate for rotation on its own.
 
 ## Pin map
 
-All pins are orthogonal to the OLED firmware; the two variants share the
-board and only the physical display differs.
+Si4732 / encoder pins are documented in
+[hardware.md](hardware.md); the TFT shield uses HSPI, which is
+independent of the Si4732 I²C bus.
 
 | Signal       | ESP32 GPIO | Consumer      |
 |--------------|------------|---------------|
@@ -64,7 +64,7 @@ jumpers, 5V + GND shared) are in [hardware.md](hardware.md).
 ## UI layout
 
 Portrait, 240×320, rotation 0. Coordinates and color/font choices are
-`constexpr` in [include/ui_layout_tft.h](../include/ui_layout_tft.h).
+`constexpr` in [include/ui_layout.h](../include/ui_layout.h).
 
 ```
 +--------------------------------------+  y=0
@@ -101,7 +101,7 @@ actually referenced, so the Flash cost is bounded to the 4 faces below.
 | `VALUE_FONT`   | `FreeSansBold9pt7b`      | Numeric dBµV next to meter label  |
 
 Legacy bitmap-font aliases (`FONT_BIG=7`, `FONT_LABEL=4`, `FONT_SMALL=2`)
-are still defined in `include/ui_layout_tft.h` as fallbacks and will be
+are still defined in `include/ui_layout.h` as fallbacks and will be
 removed once the GFX rollout has been in master for a release.
 
 ### Focus border
@@ -115,7 +115,7 @@ a dim grey border. Toggling mode repaints only those two borders.
 RSSI (0..127 dBµV from `radio.getCurrentRSSI()`) is clamped to the
 0..60 dBµV range and painted as an analog needle gauge in the left
 portion of the meter zone. Geometry comes from `GAUGE_*` constants in
-`include/ui_layout_tft.h`: the pivot lives below the visible sprite so
+`include/ui_layout.h`: the pivot lives below the visible sprite so
 only the top fan of an imaginary larger dial shows, giving the classic
 moving-coil silhouette. Tick marks sit at every 10 dBµV along the arc;
 the needle is green below 20 dBµV, yellow up to 45, and red above that.
@@ -123,7 +123,7 @@ the needle is green below 20 dBµV, yellow up to 45, and red above that.
 The gauge is rendered through a `TFT_eSprite` (`GAUGE_W × GAUGE_H`
 pixels) and pushed in one blit so the needle moves without flicker.
 Between radio polls the needle is interpolated client-side by
-`pumpNeedleAnimation()` in [src/main_tft.cpp](../src/main_tft.cpp), which
+`pumpNeedleAnimation()` in [src/main.cpp](../src/main.cpp), which
 runs an EMA on `radioGetRssi()` every `NEEDLE_ANIM_MS` (30 ms) and
 repaints only when the smoothed value has moved more than
 `NEEDLE_EPSILON`. Once the needle settles the gauge is idle — zero CPU
@@ -138,12 +138,13 @@ the header "STEREO / MONO" label.
 
 ### Rotary encoder (primary)
 
-Unchanged from the OLED firmware:
-
-- Rotate — tune frequency (in FREQ mode) or adjust volume (in VOL mode).
-- Click — toggle between FREQ and VOL.
-- Frequency mode wraps at the band edges (87.0 ↔ 108.0 MHz);
-  volume clamps at 0 and `MAX_VOLUME` (63).
+- **Rotate** — tune within the current band (in FREQ mode) or adjust
+  volume (in VOL mode). Wraps at band edges; volume clamps at 0 and
+  `MAX_VOLUME` (63).
+- **Short-click** (<500 ms) — toggle between FREQ and VOL.
+- **Long-press** (≥500 ms) — open the menu (see
+  [menu.md](menu.md)). Inside the menu, rotation navigates and click
+  confirms; another long-press backs out.
 
 ### Touch zones (alternative)
 
@@ -158,7 +159,7 @@ to let the resistive XPT2046 settle — the same pattern as
 | Volume zone     | `(0, 256, 240, 48)`  | `MODE_VOLUME`          |
 
 Touch calibration `{ 477, 3203, 487, 3356, 6 }` is hard-coded in
-`main_tft.cpp`. If the shield is replaced, re-run the calibration phase
+`main.cpp`. If the shield is replaced, re-run the calibration phase
 in `src/test_shield.cpp` and paste the resulting 5 numbers.
 
 ## RDS behaviour
@@ -185,7 +186,7 @@ characters that fit on one line at the current label font
 
 ## Rendering pipeline
 
-`updateDisplayTft()` in [src/main_tft.cpp](../src/main_tft.cpp) runs a
+`updateDisplayTft()` in [src/main.cpp](../src/main.cpp) runs a
 per-zone dirty-flags byte:
 
 | Flag           | Set by                                              |
@@ -236,7 +237,7 @@ Flash the firmware, open the serial monitor, and confirm:
 ## Known limits
 
 - **Battery meter:** no hardware in v1; the footer prints the literal
-  `"USB"` via `POWER_SOURCE` in `ui_layout_tft.h`. Wiring a LiPo +
+  `"USB"` via `POWER_SOURCE` in `ui_layout.h`. Wiring a LiPo +
   voltage divider to an ADC pin + replacing the string with an
   `analogRead()` percentage is tracked in
   [future_improvements.md](future_improvements.md).

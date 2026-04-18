@@ -1,9 +1,9 @@
 name: Release
 
 # Triggered by pushing a Semantic Version tag (vMAJOR.MINOR.PATCH) to any
-# branch. Builds every product firmware variant (esp32dev, esp32dev_tft) in
-# parallel and publishes a single GitHub Release with all compiled .bin/.elf
-# attached. See docs/releasing.md for the full runbook.
+# branch. Builds the esp32dev firmware and publishes a GitHub Release with
+# the compiled .bin / .elf attached. See docs/releasing.md for the full
+# runbook.
 #
 # `shield_test` is intentionally excluded — it is a bring-up fixture, not a
 # product (see CLAUDE.md).
@@ -17,10 +17,6 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        env: [esp32dev, esp32dev_tft]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (full history + tags)
@@ -46,16 +42,15 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
-      - name: Build firmware (${{ matrix.env }})
-        run: pio run -e ${{ matrix.env }}
+      - name: Build firmware (esp32dev)
+        run: pio run -e esp32dev
 
       - name: Stage release artifact
         run: |
           mkdir -p release
           TAG="${GITHUB_REF_NAME}"
-          ENV="${{ matrix.env }}"
-          cp ".pio/build/${ENV}/firmware.bin" "release/digi_radio-${TAG}-${ENV}.bin"
-          cp ".pio/build/${ENV}/firmware.elf" "release/digi_radio-${TAG}-${ENV}.elf"
+          cp ".pio/build/esp32dev/firmware.bin" "release/digi_radio-${TAG}-esp32dev.bin"
+          cp ".pio/build/esp32dev/firmware.elf" "release/digi_radio-${TAG}-esp32dev.elf"
           ls -la release/
 
       - name: Verify firmware identity string
@@ -65,33 +60,11 @@ jobs:
         # byte in the preceding rodata blob.
         run: |
           TAG="${GITHUB_REF_NAME}"
-          ENV="${{ matrix.env }}"
-          if ! strings "release/digi_radio-${TAG}-${ENV}.elf" | grep -q "FW=${TAG} "; then
-            echo "::error::FW_IDENTITY does not contain tag ${TAG} in ${ENV} build"
-            strings "release/digi_radio-${TAG}-${ENV}.elf" | grep 'FW=' || true
+          if ! strings "release/digi_radio-${TAG}-esp32dev.elf" | grep -q "FW=${TAG} "; then
+            echo "::error::FW_IDENTITY does not contain tag ${TAG}"
+            strings "release/digi_radio-${TAG}-esp32dev.elf" | grep 'FW=' || true
             exit 1
           fi
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.env }}
-          path: release/
-          retention-days: 1
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all matrix artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-*
-          path: release
-          merge-multiple: true
-
-      - name: List artifacts
-        run: ls -la release/
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

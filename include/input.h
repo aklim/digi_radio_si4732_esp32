@@ -1,12 +1,10 @@
 // ============================================================================
-// input.h — rotary encoder wrapper shared by the OLED and TFT firmwares.
+// input.h — rotary encoder wrapper.
 //
-// Encoder pins (A=18, B=19, BTN=5) are fixed in input.cpp and will be reused
-// on both display variants — only the display itself differs between builds.
-//
-// Touch handling is intentionally NOT declared here; it lives in main_tft.cpp
-// so the OLED firmware does not need to pull in TFT_eSPI just to get a touch
-// helper that it would never call.
+// Encoder pins (A=18, B=19, BTN=5) are fixed in input.cpp. Touch handling
+// is intentionally NOT declared here; it lives in main.cpp so the radio
+// / menu layers don't need to pull TFT_eSPI.h for a helper they'd never
+// call directly.
 // ============================================================================
 
 #ifndef INPUT_H
