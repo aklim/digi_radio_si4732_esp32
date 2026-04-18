@@ -49,7 +49,11 @@ void drawInit(TFT_eSPI &tft);
 #define RDS_OFFSET_Y         94
 #define STATUS_OFFSET_X     160
 #define STATUS_OFFSET_Y     135
-#define BATT_OFFSET_X       288
+// ATS-Mini anchors the battery widget at x=288 on their 320-wide panel;
+// pip + frame extend to x=318. Our Waveshare ST7789V shield shaves the
+// last 2-3 columns under the bezel in landscape, so the "V" of the
+// voltage string gets clipped. Pull the whole widget 4 px inward.
+#define BATT_OFFSET_X       284
 #define BATT_OFFSET_Y         0
 #define WIFI_OFFSET_X       237
 #define WIFI_OFFSET_Y         0

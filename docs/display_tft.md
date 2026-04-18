@@ -10,6 +10,37 @@ The shield bring-up fixture (`env:shield_test`, `src/test_shield.cpp`) is a
 separate environment used only for hardware validation and is not published
 by the release workflow. See [display_shield_test.md](display_shield_test.md).
 
+## Layout: ATS-Mini parity port
+
+The on-screen UI is a 1:1 port of the
+[ATS-Mini](https://github.com/esp32-si4732/ats-mini) receiver firmware. The
+panel is driven in **landscape** (`setRotation(3)` → 320×240) and the widget
+geometry, colour-theme struct, and 7-segment frequency font all match
+upstream. File structure mirrors the reference project so diffs are direct:
+
+| Our file | Upstream counterpart | Purpose |
+|---|---|---|
+| `include/Draw.h`          | `ats-mini/Draw.h`          | OFFSET_* macros + widget prototypes |
+| `src/Draw.cpp`            | `ats-mini/Draw.cpp`        | drawBattery / drawBandAndMode / drawFrequency / drawStationName / drawSMeter / drawStereoIndicator / drawRadioText / drawScale / drawScanGraphs |
+| `src/Layout-Default.cpp`  | `ats-mini/Layout-Default.cpp` | Per-frame orchestration |
+| `src/Scan.cpp` + `include/Scan.h` | `ats-mini/Scan.cpp` | Bandscope sweep engine |
+| `include/Themes.h`, `src/Themes.cpp` | `ats-mini/Themes.*` | 44-field `ColorTheme` + 9 presets |
+| `src/Battery.cpp`         | `ats-mini/Battery.cpp`     | Placeholder (4.15 V / 80 %) until LiPo hardware lands |
+
+Rendering pipeline: `main.cpp::updateDisplay()` → `drawLayoutDefault()`
+(sprite-backed, 8 bpp, 320×240 ≈ 77 KB heap; falls back to per-widget
+rect-clears on alloc failure).
+
+## Orientation and touch
+
+Landscape only — the former `DISPLAY_FLIPPED` portrait knob retired when
+the layout moved to ATS-Mini geometry. `tft.setRotation(3)` runs in
+`initDisplay()`. Our XPT2046 calibration was captured in rotation 0; the
+`handleTouch()` helper in `main.cpp` rotates the returned coords into the
+rotation-3 frame:
+
+    (x_disp, y_disp) = (y_raw, PANEL_W_NATIVE - 1 - x_raw)
+
 ## Build and flash
 
 ```bash
@@ -26,14 +57,7 @@ during the shield bring-up.
 
 ### Physical orientation
 
-`DISPLAY_FLIPPED` in [include/ui_layout.h](../include/ui_layout.h)
-chooses the panel orientation. `true` rotates the UI 180° (useful when the
-shield is mounted in a case that cannot be turned over); `false` is
-right-side-up portrait. Defaults to `true` for the current enclosure. When
-the flag is `true`, `main.cpp` also mirrors touch coordinates
-(`x → W-1-x`, `y → H-1-y`) so finger taps still hit the visually-correct
-zone — the pinned touch calibration was captured in rotation 0 and
-TFT_eSPI's `getTouch()` does not compensate for rotation on its own.
+Landscape-only. See the "Orientation and touch" section above.
 
 ## Pin map
 

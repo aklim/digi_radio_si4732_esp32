@@ -104,14 +104,27 @@ void drawLayoutDefault() {
 
     // Bottom area (y >= 120): priority order matches upstream —
     //   1. Scan graph while a sweep is active or its data is held.
-    //   2. RadioText if the station is sending RT (replaces scale).
+    //   2. RadioText if the station is sending RT with actual printable
+    //      characters (not just an empty / all-control-char buffer, which
+    //      some stations drip into the library mirror on partial decode).
     //   3. Otherwise the static band scale.
     if (scanIsActive()) {
         drawScanGraphs(radioGetFrequency());
     } else {
         char rt[65];
         radioGetRdsRt(rt, sizeof(rt));
-        if (rt[0]) {
+
+        bool rtPrintable = false;
+        for (size_t i = 0; i < sizeof(rt) && rt[i]; i++) {
+            // ASCII 0x20..0x7E is the readable range. Anything outside
+            // (control chars, nulls, 8-bit junk) means "not real RT yet"
+            // and we fall through to the scale.
+            if ((uint8_t)rt[i] >= 0x20 && (uint8_t)rt[i] <= 0x7E) {
+                rtPrintable = true;
+                break;
+            }
+        }
+        if (rtPrintable) {
             drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
         } else {
             drawScale(radioGetFrequency());
