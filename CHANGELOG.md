@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-04-19
+
+### Added
+
+- **Encoder-mode highlight.** Short-click toggles FREQUENCY ↔ VOLUME but
+  previously had no on-screen feedback, so the user could not tell which
+  parameter the next rotation would change. The sidebar `Vol: NN` row now
+  renders in `FreeSansBold9pt7b` while VOLUME is active; absence of the
+  highlight implicitly means FREQUENCY. Bitmap Font 2 has no bold sibling
+  in TFT_eSPI — switching to a GFX free font is the canonical way; both
+  fonts share `ML_DATUM` vertical centring, so the row Y does not shift
+  when the highlight toggles.
+
 ## [2.2.0] - 2026-04-18
 
 ### Added
@@ -283,7 +296,8 @@ to the TFT firmware; upgrade to the TFT shield or stay on
     [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
     on every `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v1.1.0...v2.0.0
