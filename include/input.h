@@ -41,6 +41,11 @@ void encoderInit();
 // in a long. In VOLUME mode it's a plain 0..MAX_VOLUME range.
 void encoderSetBoundsForMode(AdjustMode mode, uint16_t freq, uint8_t vol);
 
+// Which parameter the encoder is currently bound to. Owned by main.cpp;
+// exposed so the layout/draw layer can highlight the target row without
+// pulling in the whole main.cpp state.
+AdjustMode getAdjustMode();
+
 // Reconfigure the encoder for menu navigation: wide no-wrap bounds, reset to
 // zero. Callers read the raw value and compute deltas; a +/-N tick physical
 // rotation becomes a +/-N delta returned by encoderPollRotation(). On menu
