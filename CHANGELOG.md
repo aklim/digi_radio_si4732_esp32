@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-04-19
+
 ### Added
 
 - **Native Unity test suite.** Pure helpers that previously had no safety
@@ -322,7 +324,8 @@ to the TFT firmware; upgrade to the TFT shield or stay on
     [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
     on every `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.0.0...v2.1.0
