@@ -67,6 +67,16 @@ references plus gaps surfaced while building v1.
 
 ## Release / CI
 
+- Native Unity unit tests for the remaining time- / hardware-dependent
+  units — extend the initial suite in `test/test_native_*/` (covers
+  `radioFormatFrequencyPure`, `rdsSanitizeRt`, and the `g_bands[]`
+  invariants; see [firmware.md § Tests](firmware.md#tests)) to:
+  - Encoder click vs long-press state machine (`encoderPollButton()`
+    in `input.cpp`) — needs a `millis()` injection seam first.
+  - NVS rate-limiting in `persist.cpp` — needs `millis()` + a mock
+    `Preferences`.
+  - Menu viewport / cursor logic in `menu.cpp` — needs a reset entry
+    point for its namespaced statics.
 - GitHub Actions job to diff `.text` / `.data` size vs the previous tag and
   warn on regressions.
 - Upload-to-Release step that posts `User_Setup.h` and `platformio.ini`

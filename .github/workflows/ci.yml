@@ -1,0 +1,44 @@
+name: CI
+
+# Run the native host unit tests on every push and every pull request
+# targeting master. Tests run in under a minute once the PlatformIO cache
+# is warm; they gate regressions in the pure helpers (frequency formatting,
+# RDS RadioText sanitisation, band-table invariants) before code reaches
+# master. See platformio.ini [env:native] for the test env setup.
+#
+# The release workflow (`.github/workflows/release.yml`) is unchanged —
+# that one fires on tag push and builds the esp32dev firmware for the
+# GitHub Release.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.cache/pip
+          key: pio-test-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Run native unit tests
+        run: pio test -e native

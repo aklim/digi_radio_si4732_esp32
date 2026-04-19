@@ -18,7 +18,10 @@ workflow. See [display_shield_test.md](display_shield_test.md).
 | File                                   | Role                                                                 |
 |----------------------------------------|----------------------------------------------------------------------|
 | `src/main.cpp`                         | Arduino entry (`setup` / `loop`), TFT drawing, touch dispatch, menu/input routing |
-| `src/radio.cpp` + `include/radio.h`    | Si4732 wrapper: band table, `radioSetBand`, tune / volume / RDS / signal polling, `radioFormatFrequency` |
+| `src/radio.cpp` + `include/radio.h`    | Si4732 wrapper: `radioSetBand`, tune / volume / RDS / signal polling, `radioFormatFrequency` (delegates to the pure helper under the mutex) |
+| `src/band_table.cpp` + `include/radio_bands.h` | `Band` struct, `BandType` / `BandMode` enums, `g_bands[]` definitions (split out of `radio.cpp` so the native test env links them without Arduino / SI4735 / FreeRTOS) |
+| `src/rds_sanitize.cpp` + `include/rds_sanitize.h` | `rdsSanitizeRt()` — ATS-Mini-style printable-text gate for the PU2CLR RadioText buffer (split for test linkage) |
+| `include/radio_format.h`               | `radioFormatFrequencyPure()` inline helper — pure "102.4 MHz" / "1530 kHz" formatter |
 | `src/input.cpp` + `include/input.h`    | Rotary-encoder wrapper: ISR, boundaries, rotation poll, click / long-press state machine |
 | `src/menu.cpp` + `include/menu.h`      | Modal menu state machine + rendering (GFX free fonts)                |
 | `src/persist.cpp` + `include/persist.h`| Schema-versioned NVS wrapper (Preferences) with rate-limited writes  |
@@ -79,11 +82,14 @@ Design notes:
   Core 1, returning a raw pointer to a mutable shared buffer is
   unsafe.
 - RT is sanitised **at source** inside `pollRdsLocked()`. The helper
-  `sanitizeRt()` skips leading whitespace, folds non-printable bytes
-  to spaces, right-trims the result, and rejects an all-empty buffer;
-  the UI never has to second-guess whether the RT row is safe to
-  render. The RDS-acceptance gate matches ATS-Mini's triple check
-  (`getRdsReceived && getRdsSync && getRdsSyncFound`).
+  `rdsSanitizeRt()` ([src/rds_sanitize.cpp](../src/rds_sanitize.cpp))
+  skips leading whitespace, folds non-printable bytes to spaces,
+  right-trims the result, and rejects an all-empty buffer; the UI
+  never has to second-guess whether the RT row is safe to render. The
+  RDS-acceptance gate matches ATS-Mini's triple check (`getRdsReceived
+  && getRdsSync && getRdsSyncFound`). The sanitiser lives in its own
+  file so `test/test_native_rds/` can exercise it without linking
+  Arduino / SI4735.
 - `radioGetCurrentBand()` returns a stable `const Band*` (the table
   lives in `.data` and is never reallocated). Mutable fields inside
   the struct (`currentFreq`) may tear on direct read; use
@@ -206,3 +212,62 @@ shortcuts for the same mode switches the button provides.
 | Frequency | Tune within the current band   | Per band (see [menu.md](menu.md)) | Yes   | 100          |
 | Volume    | Adjust audio volume            | 0–63                           | No       | 50           |
 | Menu      | Move cursor within modal       | Full list                      | Wraps    | Off          |
+
+## Tests
+
+Host-native unit tests run under PlatformIO's Unity framework via a
+dedicated `[env:native]` — no ESP32 hardware required. Each suite lives
+in its own `test/test_native_*/` subdir; PIO discovers and runs them
+all with a single command.
+
+```bash
+pio test -e native            # Run every suite (~2 s once cached)
+pio test -e native -f test_native_format   # Run just one suite
+```
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the
+same command on every push and pull request targeting `master`, so
+a regression in any tested unit blocks merge.
+
+### Covered units
+
+| Suite                        | Subject                        | Source                                |
+|------------------------------|--------------------------------|---------------------------------------|
+| `test_native_format`         | `radioFormatFrequencyPure()`   | [include/radio_format.h](../include/radio_format.h) |
+| `test_native_rds`            | `rdsSanitizeRt()`              | [src/rds_sanitize.cpp](../src/rds_sanitize.cpp) |
+| `test_native_bands`          | `g_bands[]` invariants         | [src/band_table.cpp](../src/band_table.cpp) |
+
+The test env enables `test_build_src = yes` and narrows
+`build_src_filter` to exactly `band_table.cpp` + `rds_sanitize.cpp`, so
+the native linker never sees `radio.cpp` / `main.cpp` / `persist.cpp`
+(which depend on Arduino / SI4735 / TFT_eSPI / FreeRTOS). The
+`radio_format.h` helper is header-only, so no extra cpp is needed for
+the format suite.
+
+### Adding a new suite
+
+1. Create `test/test_native_<topic>/test_<topic>.cpp` with a
+   `void setUp()`, `void tearDown()`, one or more `static void
+   test_...()` functions using Unity's `TEST_ASSERT_*` macros, and a
+   `main()` that calls `UNITY_BEGIN()` / `RUN_TEST(...)` / `UNITY_END()`.
+2. If the code under test lives in a new cpp, add it to
+   `platformio.ini`'s `[env:native]` `build_src_filter` and to
+   `[env:esp32dev]`'s `build_src_filter` so the firmware link picks it
+   up too.
+3. Avoid pulling Arduino / SI4735 / TFT_eSPI symbols — if the logic
+   touches them, the seam belongs in a separate pure helper header (see
+   `radio_format.h` for the pattern).
+
+### Deferred
+
+Time- and hardware-dependent logic is not yet covered:
+
+- Encoder click vs long-press state machine in `input.cpp` — needs a
+  `millis()` injection seam.
+- NVS rate-limiting in `persist.cpp` — needs `millis()` + a mock
+  `Preferences`.
+- Menu viewport / cursor clamp in `menu.cpp` — needs a reset entry
+  point for its namespaced statics.
+
+These are tracked in [future_improvements.md § Release / CI](future_improvements.md#release--ci)
+and will land once the injection seams are in place.
