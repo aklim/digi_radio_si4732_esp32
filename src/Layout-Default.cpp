@@ -22,6 +22,7 @@
 #include "Themes.h"
 #include "radio.h"
 #include "Scan.h"
+#include "input.h"
 
 // Short band-mode label for the mode box. Corresponds to ATS-Mini's
 // `bandModeDesc[currentMode]`.
@@ -129,7 +130,8 @@ void drawLayoutDefault() {
     // Upstream's x/y offsets land a 86×110 box at (0, 18). Rendered
     // before the S-meter overlays so the meter's icon column stays on
     // top of the box's rounded corner.
-    drawSideBar(MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+    drawSideBar(MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X,
+                getAdjustMode() == MODE_VOLUME);
 
     // S-meter (top edge) + stereo pilot split.
     int strength = strengthFromRssi(radioGetRssi());

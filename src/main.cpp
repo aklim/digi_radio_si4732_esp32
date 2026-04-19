@@ -375,7 +375,8 @@ static void setMode(AdjustMode newMode) {
     if (newMode == currentMode) return;
     currentMode = newMode;
     encoderSetBoundsForMode(currentMode, radioGetFrequency(), radioGetVolume());
-    // Focus border colour depends on currentMode — repaint both bordered zones.
+    // Sidebar reads getAdjustMode() to bold the Vol row in VOLUME mode;
+    // repaint both zones so the highlight appears/disappears immediately.
     markDirty(DIRTY_FREQ | DIRTY_VOL);
     Serial.print(F("Mode: "));
     Serial.println((currentMode == MODE_FREQUENCY) ? F("FREQUENCY") : F("VOLUME"));
@@ -383,6 +384,10 @@ static void setMode(AdjustMode newMode) {
 
 static void toggleMode() {
     setMode(currentMode == MODE_FREQUENCY ? MODE_VOLUME : MODE_FREQUENCY);
+}
+
+AdjustMode getAdjustMode() {
+    return currentMode;
 }
 
 // Open the long-press menu. Encoder is reconfigured for menu semantics

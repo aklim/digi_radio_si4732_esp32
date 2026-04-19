@@ -311,7 +311,7 @@ void drawScale(uint32_t freq) {
 // PI rows currently show "--" placeholders; they light up in Step 6 when
 // radio.cpp grows the matching getters.
 // ---------------------------------------------------------------------------
-static void drawInfo(int x, int y, int sx) {
+static void drawInfo(int x, int y, int sx, bool volFocus) {
     if (!g_tft) return;
     TFT_eSPI &s = *g_tft;
 
@@ -357,8 +357,24 @@ static void drawInfo(int x, int y, int sx) {
 
     // Volume — real value. Upstream has mute/squelch states that change
     // the colour + text; those join in a later step.
-    s.drawString("Vol:", 6 + x, row + 0 * 16, 2);
-    s.drawNumber(radioGetVolume(), 48 + x, row + 0 * 16, 2);
+    //
+    // volFocus: when the encoder is bound to VOLUME, render the row in the
+    // FreeSansBold9pt7b GFX free font so it is visibly bolder than the
+    // surrounding Font 2 rows. Font 2 is a TFT_eSPI bitmap with no bold
+    // sibling; double-drawing with a 1 px offset just stretches glyphs
+    // horizontally, it does not look bold. Switching to a bold GFX font is
+    // the canonical Bodmer-recommended approach. With ML_DATUM already set
+    // at the top of drawInfo, both fonts vertically centre on the same y,
+    // so the row's baseline does not shift when the highlight toggles.
+    if (volFocus) {
+        s.setFreeFont(&FreeSansBold9pt7b);
+        s.drawString("Vol:", 6 + x, row + 0 * 16);
+        s.drawNumber(radioGetVolume(), 48 + x, row + 0 * 16);
+        s.setTextFont(2);  // restore bitmap Font 2 for the rows below
+    } else {
+        s.drawString("Vol:", 6 + x, row + 0 * 16, 2);
+        s.drawNumber(radioGetVolume(), 48 + x, row + 0 * 16, 2);
+    }
 
     // PI: 4-hex-digit station ID from the RDS mirror. Shows "--" when
     // the radio is not FM or PI has not decoded yet.
@@ -437,13 +453,13 @@ void drawScanGraphs(uint32_t freq) {
     s.drawLine(160, 130, 160, 169, TH.scale_pointer);
 }
 
-void drawSideBar(int x, int y, int sx) {
+void drawSideBar(int x, int y, int sx, bool volFocus) {
     // Upstream switches between a dozen overlay screens (Menu, Settings,
     // Step, BW, Theme, ...) based on currentCmd. Our firmware routes menu
     // UI through the separate modal pipeline in menu.cpp, so the sidebar
     // only ever shows the info box here. Overlay states can be ported
     // later if we also move menu.cpp under the drawLayoutDefault umbrella.
-    drawInfo(x, y, sx);
+    drawInfo(x, y, sx, volFocus);
 }
 
 void drawRadioText(int y, int ymax) {

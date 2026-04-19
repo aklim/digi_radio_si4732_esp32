@@ -74,7 +74,9 @@ void drawSMeter(int strength, int x, int y);
 void drawStereoIndicator(int x, int y, bool stereo);
 void drawRadioText(int y, int ymax);
 void drawScale(uint32_t freq);
-void drawSideBar(int x, int y, int sx);
+// volFocus=true → bolden the "Vol:" row to signal that encoder rotation
+// will change volume (not frequency). Set false in FREQUENCY mode.
+void drawSideBar(int x, int y, int sx, bool volFocus);
 void drawScanGraphs(uint32_t freq);
 
 // --- Layout orchestrators ---------------------------------------------------
