@@ -43,11 +43,15 @@ artifacts attached.
    now shows `vX.Y.Z` with `digi_radio-vX.Y.Z-esp32dev.{bin,elf}`
    attached. The `shield_test` env is intentionally not built by the
    workflow.
-7. Optionally, replace the auto-generated release notes with the matching
-   CHANGELOG section:
+7. Replace the auto-generated release notes with the matching CHANGELOG
+   section — the GitHub default body is a PR-title stub and loses the
+   "why" narrative that lives in the changelog:
    ```bash
-   gh release edit vX.Y.Z --notes-file <(awk '/^## \[X.Y.Z\]/,/^## \[/' CHANGELOG.md | head -n -1)
+   gh release edit vX.Y.Z --notes-file <(awk '/^## \[X\.Y\.Z\]/{p=1; print; next} /^## \[/{p=0} p' CHANGELOG.md)
    ```
+   The awk form above is portable to BSD awk (macOS). An earlier revision
+   used `awk '/start/,/end/' | head -n -1`, which silently produced an
+   empty body on macOS because BSD `head` rejects `-n -1` (a GNU extension).
 
 ## If something goes wrong
 

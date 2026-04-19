@@ -69,6 +69,11 @@ pio run -e esp32dev --target size         # Program size
   1. Move `[Unreleased]` items in `CHANGELOG.md` into a new `[X.Y.Z] - YYYY-MM-DD` section; update compare links.
   2. Commit, then `git tag -a vX.Y.Z -m "Release vX.Y.Z"`.
   3. `git push origin master && git push origin vX.Y.Z` — pushing the tag triggers `.github/workflows/release.yml`, which builds the `esp32dev` firmware and publishes a GitHub Release with `digi_radio-vX.Y.Z-esp32dev.{bin,elf}` attached.
+  4. After the workflow publishes the Release, replace GitHub's auto-generated "What's Changed" stub body with the matching CHANGELOG section (same command as `docs/releasing.md` step 7):
+     ```bash
+     gh release edit vX.Y.Z --notes-file <(awk '/^## \[X\.Y\.Z\]/{p=1; print; next} /^## \[/{p=0} p' CHANGELOG.md)
+     ```
+     Skipping this leaves the Release body as a bare PR-title + compare link; `CHANGELOG.md` is the canonical narrative of what shipped and must land on the Releases page too, not only in the repo.
 - **Do not** bump versions by editing files — the only knob is `git tag`.
 - **Do not** build `shield_test` env in the release workflow — it is a debug fixture for the Waveshare TFT shield, not a product artifact.
 - **Do not** rewrite or force-push a tag that has already been published as a Release — cut a new patch version instead.
