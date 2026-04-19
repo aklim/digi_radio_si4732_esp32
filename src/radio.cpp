@@ -33,6 +33,8 @@
 // ============================================================================
 
 #include "radio.h"
+#include "radio_format.h"
+#include "rds_sanitize.h"
 
 #include <Arduino.h>
 #include <SI4735.h>
@@ -42,27 +44,9 @@
 #include <stdio.h>
 #include <string.h>
 
-// ============================================================================
-// Band table
-//
-// FM Broadcast stays in 10 kHz units (Si4735 FM convention).
-// AM / MW / SW stay in 1 kHz units (Si4735 AM convention).
-// `step` is the encoder detent size in the band's native units.
-// ============================================================================
-
-Band g_bands[] = {
-    // FM Broadcast 87.0 – 108.0 MHz, 100 kHz steps. Matches v1 behaviour.
-    { "FM Broadcast", BAND_FM, MODE_FM, 8700, 10800, 10240, 10240, 10 },
-    // MW (AM broadcast) 520 – 1710 kHz, 10 kHz steps. Region-neutral (9 kHz
-    // for ITU region 1 is a later PR behind a settings toggle).
-    { "MW",           BAND_MW, MODE_AM,  520,  1710,  1000,  1000, 10 },
-    // SW 41 m amateur/broadcast 7100 – 7300 kHz, 5 kHz steps.
-    { "SW 41m",       BAND_SW, MODE_AM, 7100,  7300,  7200,  7200,  5 },
-    // SW 31 m broadcast 9400 – 9900 kHz, 5 kHz steps.
-    { "SW 31m",       BAND_SW, MODE_AM, 9400,  9900,  9700,  9700,  5 },
-};
-
-const size_t g_bandCount = sizeof(g_bands) / sizeof(g_bands[0]);
+// Band table definitions live in band_table.cpp so they can be linked into
+// native host unit tests without pulling in this file's Arduino / SI4735 /
+// FreeRTOS dependencies. See radio_bands.h for the declarations.
 
 // --- Owned state (private to this translation unit) -------------------------
 static SI4735  g_radio;
@@ -242,51 +226,9 @@ static bool pollSignalLocked() {
     return changed;
 }
 
-// Copy the PU2CLR library's RadioText buffer into `dst` (65 bytes), dropping
-// leading whitespace, folding mid-buffer control / high bytes to spaces, and
-// right-trimming the result. Returns true iff the cleaned string contains
-// at least one printable non-space character.
-//
-// Why this lives in radio.cpp (not the UI): the library's rds_buffer2A[]
-// can carry garbage for up to three 32-ms RDS blocks before a fresh 2A
-// group fully assembles, and on weak signal can contain all-zero or
-// all-control-char runs. Letting the UI decide whether to render it led
-// to occasional blank / non-printable flashes in the RT row (v2.1.0
-// fixed most cases via a Layout-Default scan, but stations that drip a
-// single stray 0x2F-lookalike into the buffer slipped through). Gating
-// at the source is the only way to guarantee "if g_rt is non-empty,
-// it's real printable text".
-//
-// Strategy matches ATS-Mini's showRadioText (Station.cpp:123-165):
-//   - skip leading whitespace,
-//   - copy up to 64 bytes, replacing non-printables with ' ',
-//   - right-trim trailing whitespace,
-//   - NUL-terminate.
-static bool sanitizeRt(const char *src, char *dst, size_t dstSize) {
-    if (!src || !dst || dstSize < 2) return false;
-    // Skip leading whitespace (ASCII <= 0x20) up to the first 64 bytes.
-    size_t i = 0;
-    while (i < 64 && src[i] && (uint8_t)src[i] <= ' ') i++;
-
-    size_t j = 0;
-    size_t limit = dstSize - 1;
-    bool anyPrintable = false;
-    for (; i < 64 && src[i] && j < limit; i++) {
-        uint8_t c = (uint8_t)src[i];
-        // CR/LF terminate the text (matches PU2CLR library convention).
-        if (c == 0x0D || c == 0x0A) break;
-        if (c < 0x20 || c > 0x7E) {
-            dst[j++] = ' ';
-        } else {
-            dst[j++] = (char)c;
-            if (c != ' ') anyPrintable = true;
-        }
-    }
-    // Right-trim trailing whitespace.
-    while (j > 0 && dst[j - 1] == ' ') j--;
-    dst[j] = 0;
-    return anyPrintable && j > 0;
-}
+// RadioText sanitiser lives in rds_sanitize.cpp (see rds_sanitize.h) so the
+// logic can be exercised by native host unit tests. Used below when pulling
+// 2A group text out of the PU2CLR library.
 
 // Poll RDS on the task's cadence. No-op on non-FM bands. Caller holds mutex.
 static bool pollRdsLocked() {
@@ -336,7 +278,7 @@ static bool pollRdsLocked() {
             // should be.
             if (libRt) {
                 char cleaned[65] = {0};
-                if (sanitizeRt(libRt, cleaned, sizeof(cleaned))) {
+                if (rdsSanitizeRt(libRt, cleaned, sizeof(cleaned))) {
                     if (strncmp(g_rt, cleaned, 64) != 0) {
                         memcpy(g_rt, cleaned, 65);
                         changed = true;
@@ -545,10 +487,10 @@ uint8_t radioGetVolume() {
 }
 
 void radioFormatFrequency(char* buf, size_t bufsize) {
-    if (!buf || bufsize < 2) return;
-
     // Snapshot the two fields we need under the mutex so the task can't
     // swap the band out from under us between reading mode and freq.
+    // The actual string build is pure and lives in radio_format.h so the
+    // formatter can be unit-tested natively.
     BandMode mode;
     uint16_t freq;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
@@ -556,13 +498,7 @@ void radioFormatFrequency(char* buf, size_t bufsize) {
     freq = activeBandLocked().currentFreq;
     xSemaphoreGive(g_mutex);
 
-    if (mode == MODE_FM) {
-        // Stored in 10 kHz units; render as MHz with one decimal.
-        snprintf(buf, bufsize, "%u.%u MHz", freq / 100, (freq % 100) / 10);
-    } else {
-        // Stored in 1 kHz units. MW/SW show whole kHz.
-        snprintf(buf, bufsize, "%u kHz", freq);
-    }
+    radioFormatFrequencyPure(mode, freq, buf, bufsize);
 }
 
 bool radioPollSignal() {

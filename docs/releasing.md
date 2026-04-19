@@ -18,6 +18,10 @@ artifacts attached.
 ## Checklist
 
 1. Ensure `master` is green and contains everything for the release.
+   The CI workflow ([.github/workflows/ci.yml](../.github/workflows/ci.yml))
+   runs `pio test -e native` on every push + PR to `master`, so a green
+   branch means the native Unity suites pass. You can re-run locally
+   with `pio test -e native` (~2 s) before cutting the tag.
 2. Edit [CHANGELOG.md](../CHANGELOG.md):
    - Move items from `## [Unreleased]` into a new `## [X.Y.Z] - YYYY-MM-DD`
      section.

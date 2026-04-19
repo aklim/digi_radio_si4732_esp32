@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Native Unity test suite.** Pure helpers that previously had no safety
+  net — `radioFormatFrequencyPure()`, `rdsSanitizeRt()`, and the
+  `g_bands[]` table — are now covered by 34 host-side unit tests split
+  across three suites under `test/test_native_*`. Runs via
+  `pio test -e native` in ~2 s with no ESP32 hardware required.
+- **CI gate.** [.github/workflows/ci.yml](.github/workflows/ci.yml) runs
+  the native test suite on every push and pull request targeting
+  `master`, blocking regressions before merge. The release workflow is
+  unchanged — it still fires only on `vX.Y.Z` tags.
+
+### Changed
+
+- **`radio.cpp` split for testability.** Band table (`Band` struct +
+  enums in [include/radio_bands.h](include/radio_bands.h),
+  definitions in `src/band_table.cpp`), RDS RadioText sanitiser
+  ([include/rds_sanitize.h](include/rds_sanitize.h) +
+  `src/rds_sanitize.cpp`), and the pure frequency formatter
+  ([include/radio_format.h](include/radio_format.h)) moved out of
+  `src/radio.cpp` so the native test env can link them without pulling
+  Arduino / SI4735 / TFT_eSPI / FreeRTOS. No runtime behaviour change on
+  hardware — `radio.h` still re-exports the same names, and
+  `radioFormatFrequency()` delegates to the pure helper under the
+  mutex.
+
 ## [2.2.1] - 2026-04-19
 
 ### Added

@@ -74,6 +74,22 @@ pio run -e shield_test -t upload     # Shield bring-up fixture (not a product)
 All library dependencies are fetched automatically by PlatformIO on
 first build.
 
+## Tests
+
+Pure host-side logic (frequency formatting, RDS RadioText sanitisation,
+band-table invariants) runs under PlatformIO's Unity test runner on the
+developer's machine — no ESP32 hardware required.
+
+```bash
+pio test -e native                   # Run the native test suite (~2 s)
+```
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs the same suite
+on every push and pull request to `master`, so regressions in the
+tested units block merges. See
+[docs/firmware.md](docs/firmware.md#tests) for what is covered and how
+to add a new suite.
+
 ## Usage
 
 1. Power on — splash screen, then the main UI within ~1 s.
@@ -109,6 +125,7 @@ See [docs/menu.md](docs/menu.md) for the full UX and band table.
 - [docs/display_shield_test.md](docs/display_shield_test.md) — TFT shield bring-up fixture
 - [docs/future_improvements.md](docs/future_improvements.md) — ATS-Mini parity roadmap
 - [docs/releasing.md](docs/releasing.md) — how to cut a new release
+- [docs/firmware.md § Tests](docs/firmware.md#tests) — native Unity suites covered by CI
 
 ## Versioning & Releases
 

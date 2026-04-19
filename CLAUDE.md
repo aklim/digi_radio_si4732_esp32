@@ -15,15 +15,19 @@ pio run -e esp32dev                       # Build firmware
 pio run -e esp32dev -t upload             # Build + flash
 pio run -e shield_test -t upload          # TFT shield bring-up fixture (not a product)
 pio run -e esp32dev --target size         # Program size
+pio test -e native                        # Run native host unit tests (Unity)
 ```
 
 ## Architecture
 
-- **Build system:** PlatformIO (`platformio.ini`) with a `[common]` base section and two envs: `esp32dev` (product) and `shield_test` (bring-up fixture). Each env uses an explicit `build_src_filter` to control which `src/*.cpp` files it pulls in.
-- **Framework:** Arduino.
+- **Build system:** PlatformIO (`platformio.ini`) with a `[common]` base section and three envs: `esp32dev` (product), `shield_test` (bring-up fixture), and `native` (host-side unit tests via Unity). The hardware envs use an explicit `build_src_filter` to control which `src/*.cpp` files they pull in; `native` enables `test_build_src = yes` plus a narrow `build_src_filter` so it links only the pure helper cpps.
+- **Framework:** Arduino (esp32dev / shield_test); native for test env.
 - **Sources:**
   - `src/main.cpp` — Arduino entry (`setup` / `loop`), TFT drawing, touch dispatch, menu/input routing.
-  - `src/radio.cpp` + `include/radio.h` — Si4732 wrapper: band table, `radioSetBand()`, tune / volume / RDS / signal polling, `radioFormatFrequency()` (mode-aware unit).
+  - `src/radio.cpp` + `include/radio.h` — Si4732 wrapper: `radioSetBand()`, tune / volume / RDS / signal polling, `radioFormatFrequency()` (mode-aware unit, delegates to the pure helper in `include/radio_format.h` under the mutex).
+  - `src/band_table.cpp` + `include/radio_bands.h` — `Band` struct + `BandType` / `BandMode` enums + `g_bands[]` definitions. Split out of `radio.cpp` so the native test env can link it without Arduino / SI4735 / FreeRTOS.
+  - `src/rds_sanitize.cpp` + `include/rds_sanitize.h` — `rdsSanitizeRt()` (ATS-Mini-style printable-text gate for the PU2CLR library's RadioText buffer). Split out of `radio.cpp` for the same reason.
+  - `include/radio_format.h` — `radioFormatFrequencyPure()` inline helper (pure string build; the thread-safe wrapper in `radio.cpp` snapshots mode + freq under the mutex, then calls this).
   - `src/input.cpp` + `include/input.h` — rotary-encoder wrapper with `ButtonEvent { BTN_NONE, BTN_CLICK, BTN_LONG_PRESS }` (500 ms threshold) and `encoderSetBoundsForMenu()`.
   - `src/menu.cpp` + `include/menu.h` — modal menu state machine (`MENU_TOP` → `MENU_BAND` / `MENU_BW` / `MENU_AGC` / `MENU_THEME`) with a scrolling list viewport; GFX-free-font rendering.
   - `src/persist.cpp` + `include/persist.h` — versioned NVS (Preferences) wrapper with rate-limited writes. Schema guarded by `PERSIST_SCHEMA_VER` (v3 — adds per-mode `bw_fm` / `bw_am` IF-filter and `agc_fm` / `agc_am` attenuator indices).
@@ -31,8 +35,8 @@ pio run -e esp32dev --target size         # Program size
   - `include/ui_layout.h` — UI coordinates, colours, font choices.
   - `include/User_Setup.h` — TFT_eSPI configuration (force-included via platformio.ini).
 - **Libraries:** PU2CLR SI4735, TFT_eSPI (also covers XPT2046 touch), Ai Esp32 Rotary Encoder.
-- **Tests:** `test/` — PlatformIO test runner (no tests written yet).
-- **Docs:** `docs/` — hardware wiring, firmware architecture, TFT UI spec, menu spec, shield bring-up, future-improvements roadmap, release runbook.
+- **Tests:** `test/test_native_format/`, `test/test_native_rds/`, `test/test_native_bands/` — Unity suites for `radioFormatFrequencyPure`, `rdsSanitizeRt`, and `g_bands[]` invariants. Run with `pio test -e native` (~2 s, no hardware needed). Gated in CI via [.github/workflows/ci.yml](.github/workflows/ci.yml) on push + PR to master. Time-mocked units (encoder click/long-press SM, persist rate-limiting) are deferred pending a `millis()` injection seam — see [docs/future_improvements.md](docs/future_improvements.md) "Release / CI".
+- **Docs:** `docs/` — hardware wiring, firmware architecture (includes tests section), TFT UI spec, menu spec, shield bring-up, future-improvements roadmap, release runbook.
 
 ## Key Implementation Details
 
@@ -59,6 +63,10 @@ pio run -e esp32dev --target size         # Program size
 - All pin assignments and tuning parameters are `constexpr` constants at the top of `main.cpp`.
 - Functions have Doxygen-style or concise inline doc comments.
 - All comments and documentation in English.
+
+## Workflow
+
+- **Branching:** every task begins on a new branch off `master` (`feature/<short-name>` or `fix/<short-name>`, e.g. `git checkout -b feature/add-unit-tests`). Never commit directly to `master`. Merge via PR once tests and the `esp32dev` firmware build pass.
 
 ## Versioning & Releases
 
