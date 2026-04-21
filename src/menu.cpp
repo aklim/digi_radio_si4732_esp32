@@ -45,6 +45,7 @@
 #include "Themes.h"
 #include "Scan.h"
 #include "connectivity.h"
+#include "backlight.h"
 
 namespace {
 
@@ -56,6 +57,7 @@ enum MenuState : uint8_t {
     MENU_STATE_AGC,
     MENU_STATE_THEME,
     MENU_STATE_SETTINGS,
+    MENU_STATE_BRIGHTNESS,
 };
 
 MenuState g_state   = MENU_STATE_CLOSED;
@@ -102,14 +104,38 @@ int  themeItemCount()         { return getTotalThemes() + 1; }
 bool themeItemIsBack(int idx) { return idx >= getTotalThemes(); }
 
 // --- Settings submenu items ------------------------------------------------
-// Boolean feature toggles — RDS / Bluetooth / WiFi. Order here drives the
-// indices used by menuHandleClick below; keep the "Back" row last.
-constexpr int SETTINGS_IDX_RDS  = 0;
-constexpr int SETTINGS_IDX_BT   = 1;
-constexpr int SETTINGS_IDX_WIFI = 2;
-constexpr int SETTINGS_COUNT    = 4;     // 3 toggles + Back
+// Boolean feature toggles + the Brightness entry (which descends into its
+// own picker). Order here drives the indices used by menuHandleClick below;
+// keep the "Back" row last.
+constexpr int SETTINGS_IDX_RDS        = 0;
+constexpr int SETTINGS_IDX_BT         = 1;
+constexpr int SETTINGS_IDX_WIFI       = 2;
+constexpr int SETTINGS_IDX_BRIGHTNESS = 3;
+constexpr int SETTINGS_COUNT          = 5;     // 3 toggles + brightness + Back
 
 bool settingsItemIsBack(int idx) { return idx >= SETTINGS_COUNT - 1; }
+
+// --- Brightness-picker items -----------------------------------------------
+// One row per entry in BACKLIGHT_LEVELS[] (20/40/60/80/100%) plus a trailing
+// "Back" row that returns to Settings without committing.
+int  brightnessItemCount()         { return BACKLIGHT_LEVEL_COUNT + 1; }
+bool brightnessItemIsBack(int idx) { return idx >= BACKLIGHT_LEVEL_COUNT; }
+
+// Map the currently applied percent to its index in BACKLIGHT_LEVELS[] so
+// the picker opens with the active row highlighted. Falls back to the
+// closest match if the stored value isn't on the coarse grid (e.g. after a
+// future PR introduces finer steps and is then downgraded).
+int brightnessActiveIdx() {
+    uint8_t cur = backlightGet();
+    int best_i = 0;
+    int best_d = 255;
+    for (int i = 0; i < BACKLIGHT_LEVEL_COUNT; i++) {
+        int d = (int)BACKLIGHT_LEVELS[i] - (int)cur;
+        if (d < 0) d = -d;
+        if (d < best_d) { best_d = d; best_i = i; }
+    }
+    return best_i;
+}
 
 // --- Layout constants (kept local since ui_layout.h is zone-focused) ---
 constexpr int MENU_ROW_H      = 30;
@@ -123,13 +149,14 @@ constexpr int MENU_HINT_Y     = SCREEN_H - 18;
 
 int currentItemCount() {
     switch (g_state) {
-        case MENU_STATE_TOP:      return TOP_COUNT;
-        case MENU_STATE_BAND:     return bandItemCount();
-        case MENU_STATE_BW:       return bwItemCount();
-        case MENU_STATE_AGC:      return agcItemCount();
-        case MENU_STATE_THEME:    return themeItemCount();
-        case MENU_STATE_SETTINGS: return SETTINGS_COUNT;
-        default:                  return 0;
+        case MENU_STATE_TOP:        return TOP_COUNT;
+        case MENU_STATE_BAND:       return bandItemCount();
+        case MENU_STATE_BW:         return bwItemCount();
+        case MENU_STATE_AGC:        return agcItemCount();
+        case MENU_STATE_THEME:      return themeItemCount();
+        case MENU_STATE_SETTINGS:   return SETTINGS_COUNT;
+        case MENU_STATE_BRIGHTNESS: return brightnessItemCount();
+        default:                    return 0;
     }
 }
 
@@ -288,10 +315,16 @@ void labelSettings(int idx, char *buf, size_t n) {
             snprintf(buf, n, "WiFi: %s",
                      connectivityGetWifiEnabled() ? "On" : "Off");
             break;
+        case SETTINGS_IDX_BRIGHTNESS:
+            snprintf(buf, n, "Brightness: %u%%", (unsigned)backlightGet());
+            break;
         default:
             if (n) buf[0] = 0;
             break;
     }
+}
+void labelBrightness(int idx, char *buf, size_t n) {
+    snprintf(buf, n, "%u%%", (unsigned)BACKLIGHT_LEVELS[idx]);
 }
 
 // --- Per-state drawers (all delegate to drawList) -------------------------
@@ -319,6 +352,10 @@ void drawThemeMenu(TFT_eSPI& tft) {
 void drawSettingsMenu(TFT_eSPI& tft) {
     drawList(tft, "Settings", SETTINGS_COUNT, -1,
              labelSettings, settingsItemIsBack, "Click = toggle");
+}
+void drawBrightnessMenu(TFT_eSPI& tft) {
+    drawList(tft, "Brightness", brightnessItemCount(), brightnessActiveIdx(),
+             labelBrightness, brightnessItemIsBack, "* = active level");
 }
 
 }  // namespace
@@ -457,33 +494,60 @@ void menuHandleClick() {
             transitionTo(MENU_STATE_TOP);
             return;
         }
-        // Toggle the matching flag, persist it, and stay inside the
-        // Settings submenu so the user can flip several toggles in one
-        // visit. g_dirty forces a repaint so the "On"/"Off" text flips
-        // immediately.
+        // Toggles flip and stay in Settings so the user can flip several
+        // in one visit. Brightness descends into its own picker because
+        // the value space is > 2 options.
         switch (g_cursor) {
             case SETTINGS_IDX_RDS: {
                 bool en = !radioGetRdsEnabled();
                 radioSetRdsEnabled(en);
                 persistSaveRdsEnabled(en ? 1 : 0);
-                break;
+                g_dirty = true;
+                return;
             }
             case SETTINGS_IDX_BT: {
                 bool en = !connectivityGetBtEnabled();
                 connectivitySetBtEnabled(en);
                 persistSaveBtEnabled(en ? 1 : 0);
-                break;
+                g_dirty = true;
+                return;
             }
             case SETTINGS_IDX_WIFI: {
                 bool en = !connectivityGetWifiEnabled();
                 connectivitySetWifiEnabled(en);
                 persistSaveWifiEnabled(en ? 1 : 0);
-                break;
+                g_dirty = true;
+                return;
             }
+            case SETTINGS_IDX_BRIGHTNESS:
+                transitionTo(MENU_STATE_BRIGHTNESS);
+                g_cursor = brightnessActiveIdx();
+                g_dirty  = true;
+                return;
             default:
-                break;
+                return;
         }
-        g_dirty = true;
+    }
+
+    if (g_state == MENU_STATE_BRIGHTNESS) {
+        if (brightnessItemIsBack(g_cursor)) {
+            // Return to Settings with the cursor on the Brightness row so
+            // the picker feels like a natural descend/return instead of
+            // dropping the user at the top of Settings.
+            g_state  = MENU_STATE_SETTINGS;
+            g_cursor = SETTINGS_IDX_BRIGHTNESS;
+            g_dirty  = true;
+            return;
+        }
+        uint8_t level = BACKLIGHT_LEVELS[g_cursor];
+        backlightApply(level);
+        persistSaveBacklight(level);
+        // Stay in Settings after committing — same return pattern as the
+        // Back path above. The Brightness row now reflects the new value
+        // because labelSettings() reads backlightGet() live.
+        g_state  = MENU_STATE_SETTINGS;
+        g_cursor = SETTINGS_IDX_BRIGHTNESS;
+        g_dirty  = true;
         return;
     }
 }
@@ -501,12 +565,13 @@ void menuDraw(TFT_eSPI& tft) {
     tft.fillScreen(COL_BG);
 
     switch (g_state) {
-        case MENU_STATE_TOP:      drawTopMenu(tft);      break;
-        case MENU_STATE_BAND:     drawBandMenu(tft);     break;
-        case MENU_STATE_BW:       drawBwMenu(tft);       break;
-        case MENU_STATE_AGC:      drawAgcMenu(tft);      break;
-        case MENU_STATE_THEME:    drawThemeMenu(tft);    break;
-        case MENU_STATE_SETTINGS: drawSettingsMenu(tft); break;
+        case MENU_STATE_TOP:        drawTopMenu(tft);        break;
+        case MENU_STATE_BAND:       drawBandMenu(tft);       break;
+        case MENU_STATE_BW:         drawBwMenu(tft);         break;
+        case MENU_STATE_AGC:        drawAgcMenu(tft);        break;
+        case MENU_STATE_THEME:      drawThemeMenu(tft);      break;
+        case MENU_STATE_SETTINGS:   drawSettingsMenu(tft);   break;
+        case MENU_STATE_BRIGHTNESS: drawBrightnessMenu(tft); break;
         default: break;
     }
 }

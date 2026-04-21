@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Backlight brightness picker.** Long-press → **Settings → Brightness**
+  opens a 5-step picker (20 / 40 / 60 / 80 / 100 %) with the active level
+  marked. The choice is applied immediately via the LEDC PWM on `TFT_BL`
+  and persisted to NVS so it survives reboots. New `backlight.cpp` /
+  `backlight.h` module owns the LEDC channel + percent→duty mapping.
+
+- **Persist schema v5.** One new `u8` key — `bl_level` (default
+  `BACKLIGHT_DEFAULT_PERCENT` = 55). Upgraders from v1 / v2 / v3 / v4
+  keep their existing state and get the default brightness seeded;
+  wipe path seeds the default too.
+
+### Changed
+
+- **Power reduction.** Three targeted changes land together:
+  - `setCpuFrequencyMhz(80)` on boot. The firmware has no DSP, no I2S
+    audio, and no CPU-bound workload — 80 MHz is the documented
+    minimum for the ESP32 WiFi/BT stacks and is more than enough for
+    Si4732 I²C (100 kHz) + hardware-SPI-driven TFT_eSPI. Logged early
+    in `setup()` so the applied frequency is visible in the serial
+    console.
+  - `vTaskDelay(1)` at the end of `loop()`. The Arduino `loopTask`
+    runs at priority 1 above the FreeRTOS idle task (priority 0), so
+    without an explicit yield Core 1 spins at full clock even when
+    every early-out in the loop fires. A single-tick yield per
+    iteration lets the scheduler enter the idle-task sleep path.
+  - Default TFT backlight level dropped from ~86 % (220/255) to 55 %
+    (the new persisted default). The backlight LED is the largest
+    single continuous consumer after the Si4732 itself; 55 % remains
+    clearly visible in a lit room. Users who want more can raise it
+    via the new Brightness picker.
+
 ## [2.4.0] - 2026-04-21
 
 ### Changed
