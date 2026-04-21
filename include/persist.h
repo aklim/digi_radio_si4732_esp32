@@ -30,7 +30,10 @@
 //   v2 — adds: theme (active palette index, see Themes.h)
 //   v3 — adds: bw_fm, bw_am (Si4732 IF-filter index per mode),
 //              agc_fm, agc_am (AGC / manual attenuator index per mode)
-constexpr uint16_t PERSIST_SCHEMA_VER = 3;
+//   v4 — adds: rds_en (RDS decode enable, default 1),
+//              bt_en  (Bluetooth enable, default 0),
+//              wifi_en (WiFi enable, default 0)
+constexpr uint16_t PERSIST_SCHEMA_VER = 4;
 
 // Load cached values from NVS and apply the schema-version gate. Safe to
 // call before radioInit(); it does not touch the Si4735. Idempotent.
@@ -78,5 +81,17 @@ uint8_t persistLoadAgcFm();
 void    persistSaveAgcFm(uint8_t idx);
 uint8_t persistLoadAgcAm();
 void    persistSaveAgcAm(uint8_t idx);
+
+// --- Feature enable flags (v4) ---------------------------------------------
+// Stored as u8 (0/1). Defaults: RDS on, Bluetooth off, WiFi off.
+// RDS-off short-circuits the I²C poll loop in radio.cpp; BT/WiFi flags are
+// consumed by connectivity.cpp (the real stacks are not implemented yet —
+// flags currently only gate the header indicator icons).
+uint8_t persistLoadRdsEnabled();
+void    persistSaveRdsEnabled(uint8_t en);
+uint8_t persistLoadBtEnabled();
+void    persistSaveBtEnabled(uint8_t en);
+uint8_t persistLoadWifiEnabled();
+void    persistSaveWifiEnabled(uint8_t en);
 
 #endif  // PERSIST_H

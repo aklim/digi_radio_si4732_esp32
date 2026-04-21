@@ -80,6 +80,11 @@ static char     g_ps[9]  = {0};
 static char     g_rt[65] = {0};
 static uint16_t g_rdsPi  = 0;  // 16-bit PI code; 0 == "not decoded"
 
+// User-controlled RDS decode gate. Default true so existing firmware
+// behaviour (RDS always on in FM) carries over. Menu "Settings -> RDS"
+// toggles this via radioSetRdsEnabled(); persist.cpp owns the flag on disk.
+static bool     g_rdsEnabled = true;
+
 // --- Bandwidth catalogues (verbatim indices/labels from ats-mini) ----------
 // FM filter: 5 presets; SI4735 setFmBandwidth takes the `filter_idx` field.
 struct BwEntry { uint8_t filter; const char *desc; };
@@ -182,8 +187,10 @@ static void applyBandLocked() {
         g_radio.setFM(b.minFreq, b.maxFreq, b.currentFreq, b.step);
         // Permissive RDS block-error thresholds — more data at the cost of
         // occasional garbled characters, which is the right tradeoff for a
-        // portable FM receiver.
-        g_radio.setRdsConfig(1, 3, 3, 3, 3);
+        // portable FM receiver. The first argument gates the chip's RDS
+        // decoder itself; when the user has disabled RDS in Settings we
+        // pass 0 so the Si4735 stops processing blocks entirely.
+        g_radio.setRdsConfig(g_rdsEnabled ? 1 : 0, 3, 3, 3, 3);
     } else {
         // AM / MW / SW. SSB would take a separate setSSB path once the lib
         // patch loader lands in a later PR.
@@ -230,9 +237,11 @@ static bool pollSignalLocked() {
 // logic can be exercised by native host unit tests. Used below when pulling
 // 2A group text out of the PU2CLR library.
 
-// Poll RDS on the task's cadence. No-op on non-FM bands. Caller holds mutex.
+// Poll RDS on the task's cadence. No-op on non-FM bands or when the user
+// has disabled RDS in Settings. Caller holds mutex.
 static bool pollRdsLocked() {
     if (g_scanActive) return false;
+    if (!g_rdsEnabled) return false;   // Settings toggle — skips all I²C traffic.
     if (activeBandLocked().mode != MODE_FM) return false;
 
     unsigned long now = millis();
@@ -561,6 +570,55 @@ uint16_t radioGetRdsPi() {
     uint16_t pi = g_rdsPi;
     xSemaphoreGive(g_mutex);
     return pi;
+}
+
+void radioSetRdsEnabled(bool enabled) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    if (enabled == g_rdsEnabled) {
+        xSemaphoreGive(g_mutex);
+        return;
+    }
+    g_rdsEnabled = enabled;
+
+    // Push the decision to the chip only when we're on FM — setRdsConfig is
+    // ignored on AM/SW firmware, and any AM-mode call is a no-op anyway.
+    // Future FM-band switches pick up g_rdsEnabled via applyBandLocked().
+    if (activeBandLocked().mode == MODE_FM) {
+        g_radio.setRdsConfig(enabled ? 1 : 0, 3, 3, 3, 3);
+    }
+
+    if (!enabled) {
+        // Clear the mirror on disable so the UI immediately falls back to
+        // drawScale (Layout-Default uses `rt[0]==0` as the switch). PI/PS
+        // zero too so a later re-enable doesn't briefly show stale text
+        // before the next sync arrives.
+        g_ps[0]       = 0;
+        g_rt[0]       = 0;
+        g_rdsPi       = 0;
+        g_lastRdsSync = 0;
+        g_rdsChanged  = true;
+    } else {
+        // Reset the poll throttle so the next task tick actually issues a
+        // getRdsStatus() call instead of waiting out the 200 ms window.
+        g_lastRdsPoll = 0;
+    }
+    xSemaphoreGive(g_mutex);
+}
+
+bool radioGetRdsEnabled() {
+    // Atomic bool read — no mutex needed; the menu renders this every frame
+    // and we don't want to serialise against the Core-0 task for that.
+    return g_rdsEnabled;
+}
+
+bool radioIsRdsSyncing() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    bool syncing = g_rdsEnabled
+                   && (activeBandLocked().mode == MODE_FM)
+                   && g_lastRdsSync
+                   && (millis() - g_lastRdsSync < RDS_STALE_MS);
+    xSemaphoreGive(g_mutex);
+    return syncing;
 }
 
 // --- Bandwidth --------------------------------------------------------------

@@ -127,6 +127,20 @@ void radioGetRdsRt(char* buf, size_t bufsize);
 // when not decoded yet, on no-sync, or on non-FM bands.
 uint16_t radioGetRdsPi();
 
+// User-controlled RDS decode gate. When disabled, the Core-0 task's RDS
+// poll early-returns (no I²C traffic), the Si4735's RDS block is turned
+// off via setRdsConfig(0,...), and the PS/RT/PI mirrors are cleared so
+// the UI falls back to the band scale. Enabling on an FM band re-arms
+// the library and a fresh sync re-populates the mirror within a second.
+// Safe to call from any thread — mutex-guarded internally.
+void radioSetRdsEnabled(bool enabled);
+bool radioGetRdsEnabled();
+
+// True when RDS is enabled AND the chip currently reports in-sync RDS
+// (i.e. g_lastRdsSync is fresh within RDS_STALE_MS). Drives the header
+// indicator's dim/bright colour split.
+bool radioIsRdsSyncing();
+
 // --- Bandwidth filter -------------------------------------------------------
 // Si4735 has distinct AM/SSB/FM filter tables. We keep two bandwidth
 // catalogues (FM 5 presets, AM 7 presets) whose indices are _stable_ per

@@ -43,17 +43,19 @@ long-press threshold lives in
 │  AGC                  │
 │  Theme                │
 │  Scan                 │
+│  Settings             │
 │  Close                │
 │ Rotate = select       │
 │ Click  = confirm      │
 └───────────────────────┘
      │ click one of:
-     ├─ "Band"  → band picker
-     ├─ "BW"    → IF-filter picker (mode-dependent list)
-     ├─ "AGC"   → AGC / manual attenuator picker
-     ├─ "Theme" → palette picker
-     ├─ "Scan"  → start bandscope sweep, close menu
-     └─ "Close" → close menu
+     ├─ "Band"     → band picker
+     ├─ "BW"       → IF-filter picker (mode-dependent list)
+     ├─ "AGC"      → AGC / manual attenuator picker
+     ├─ "Theme"    → palette picker
+     ├─ "Scan"     → start bandscope sweep, close menu
+     ├─ "Settings" → feature toggles (RDS / Bluetooth / WiFi)
+     └─ "Close"    → close menu
 
 ┌─ Band ────────────────┐
 │  FM Broadcast     *   │   <- "*" = currently active band
@@ -85,6 +87,14 @@ long-press threshold lives in
 │  < Back               │
 │ * = active AGC        │
 └───────────────────────┘
+
+┌─ Settings ────────────┐
+│  RDS: On              │   <- click toggles On ↔ Off
+│  Bluetooth: Off       │
+│  WiFi: Off            │
+│  < Back               │
+│ Click = toggle        │
+└───────────────────────┘
 ```
 
 Controls inside the menu:
@@ -115,6 +125,13 @@ Controls inside the menu:
   to track the new frequency (matches ATS-Mini CMD_SCAN). Click exits
   the scan keeping the current tune; long-press exits and restores the
   pre-scan frequency.
+- **Settings** — feature toggles. Each click flips RDS / Bluetooth /
+  WiFi between On and Off and saves the new state to NVS; the submenu
+  stays open so multiple toggles can be flipped without re-entering.
+  Disabling RDS short-circuits the Si4735's RDS decoder and the Core-0
+  poll loop (no I²C traffic, PS/RT/PI mirrors cleared). Bluetooth and
+  WiFi flags only gate the header indicator icons today — the real
+  radio stacks land in follow-up PRs.
 
 ## Persistence
 
@@ -134,6 +151,9 @@ Runtime state is stored in the ESP32 NVS partition via `<Preferences.h>`
 - `bw_am`     — AM/SW IF-filter index (0..6). Added in v3. Default 4 (3.0k).
 - `agc_fm`    — FM AGC/attenuator index (0..27). Added in v3. Default 0 (AGC on).
 - `agc_am`    — AM/SW AGC/attenuator index (0..37). Added in v3. Default 0.
+- `rds_en`    — RDS decode enable (0/1). Added in v4. Default 1 (on).
+- `bt_en`     — Bluetooth enable (0/1). Added in v4. Default 0 (off).
+- `wifi_en`   — WiFi enable (0/1). Added in v4. Default 0 (off).
 
 Writes are coalesced with a 1-second rate limit inside
 [src/persist.cpp](../src/persist.cpp), so rapid encoder rotation doesn't
