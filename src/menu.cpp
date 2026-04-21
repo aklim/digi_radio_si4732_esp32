@@ -39,6 +39,7 @@
 // multi-definition errors. We just reference the struct names directly.
 
 #include "radio.h"
+#include "radio_format.h"
 #include "persist.h"
 #include "input.h"
 #include "ui_layout.h"
@@ -58,11 +59,14 @@ enum MenuState : uint8_t {
     MENU_STATE_THEME,
     MENU_STATE_SETTINGS,
     MENU_STATE_BRIGHTNESS,
+    MENU_STATE_MEMORY,         // list of 16 preset slots + Back
+    MENU_STATE_MEMORY_SLOT,    // Load / Save / Delete / Back for g_memorySlot
 };
 
-MenuState g_state   = MENU_STATE_CLOSED;
-int       g_cursor  = 0;   // highlighted row in the current state
-bool      g_dirty   = false;
+MenuState g_state       = MENU_STATE_CLOSED;
+int       g_cursor      = 0;   // highlighted row in the current state
+bool      g_dirty       = false;
+uint8_t   g_memorySlot  = 0;   // slot currently being edited in MEMORY_SLOT
 
 // --- Top-level menu items ---------------------------------------------------
 // Order here is the visible order. CMD_CLOSE stays last so "click-bottom
@@ -74,6 +78,7 @@ constexpr TopItem TOP_ITEMS[] = {
     { "AGC",      CMD_AGC       },
     { "Theme",    CMD_THEME     },
     { "Scan",     CMD_SCAN      },
+    { "Memory",   CMD_MEMORY    },
     { "Settings", CMD_SETTINGS  },
     { "Close",    CMD_CLOSE     },
 };
@@ -121,6 +126,28 @@ bool settingsItemIsBack(int idx) { return idx >= SETTINGS_COUNT - 1; }
 int  brightnessItemCount()         { return BACKLIGHT_LEVEL_COUNT + 1; }
 bool brightnessItemIsBack(int idx) { return idx >= BACKLIGHT_LEVEL_COUNT; }
 
+// --- Memory-preset items ---------------------------------------------------
+// MENU_STATE_MEMORY: one row per preset slot (0..PRESET_SLOT_COUNT-1) plus
+// a trailing "Back" row. Scrolls through the 16 slots via the existing
+// viewport machinery.
+int  memoryItemCount()         { return PRESET_SLOT_COUNT + 1; }
+bool memoryItemIsBack(int idx) { return idx >= (int)PRESET_SLOT_COUNT; }
+
+// MENU_STATE_MEMORY_SLOT: per-slot action list. A filled slot shows
+//   idx 0 = Load, 1 = Save current, 2 = Delete, 3 = Back
+// An empty slot hides the Load/Delete rows so only
+//   idx 0 = Save current, 1 = Back
+// remain. Keeping the Back row index variable means the shared drawList
+// renderer handles scrolling / back-row styling without a separate path.
+constexpr int MEMORY_SLOT_FILLED_COUNT = 4;
+constexpr int MEMORY_SLOT_EMPTY_COUNT  = 2;
+int  memorySlotItemCount() {
+    return persistPresetIsValid(g_memorySlot)
+        ? MEMORY_SLOT_FILLED_COUNT
+        : MEMORY_SLOT_EMPTY_COUNT;
+}
+bool memorySlotItemIsBack(int idx) { return idx >= memorySlotItemCount() - 1; }
+
 // Map the currently applied percent to its index in BACKLIGHT_LEVELS[] so
 // the picker opens with the active row highlighted. Falls back to the
 // closest match if the stored value isn't on the coarse grid (e.g. after a
@@ -149,14 +176,16 @@ constexpr int MENU_HINT_Y     = SCREEN_H - 18;
 
 int currentItemCount() {
     switch (g_state) {
-        case MENU_STATE_TOP:        return TOP_COUNT;
-        case MENU_STATE_BAND:       return bandItemCount();
-        case MENU_STATE_BW:         return bwItemCount();
-        case MENU_STATE_AGC:        return agcItemCount();
-        case MENU_STATE_THEME:      return themeItemCount();
-        case MENU_STATE_SETTINGS:   return SETTINGS_COUNT;
-        case MENU_STATE_BRIGHTNESS: return brightnessItemCount();
-        default:                    return 0;
+        case MENU_STATE_TOP:         return TOP_COUNT;
+        case MENU_STATE_BAND:        return bandItemCount();
+        case MENU_STATE_BW:          return bwItemCount();
+        case MENU_STATE_AGC:         return agcItemCount();
+        case MENU_STATE_THEME:       return themeItemCount();
+        case MENU_STATE_SETTINGS:    return SETTINGS_COUNT;
+        case MENU_STATE_BRIGHTNESS:  return brightnessItemCount();
+        case MENU_STATE_MEMORY:      return memoryItemCount();
+        case MENU_STATE_MEMORY_SLOT: return memorySlotItemCount();
+        default:                     return 0;
     }
 }
 
@@ -326,6 +355,43 @@ void labelSettings(int idx, char *buf, size_t n) {
 void labelBrightness(int idx, char *buf, size_t n) {
     snprintf(buf, n, "%u%%", (unsigned)BACKLIGHT_LEVELS[idx]);
 }
+void labelMemory(int idx, char *buf, size_t n) {
+    // Slot index is 0-based; render one-based for user-friendly numbering
+    // ("01..16") so the list reads like preset buttons rather than array
+    // indices.
+    PresetSlot p = persistLoadPreset((uint8_t)idx);
+    if (!p.valid) {
+        snprintf(buf, n, "%02d  <empty>", idx + 1);
+        return;
+    }
+    // Defensive guard: if the stored band is no longer valid (band table
+    // shrank in a future firmware that still reads an old NVS), show the
+    // slot as empty-ish instead of dereferencing past g_bands[].
+    if (p.band >= g_bandCount) {
+        snprintf(buf, n, "%02d  (band?)", idx + 1);
+        return;
+    }
+    char freqStr[12];
+    radioFormatFrequencyPure(g_bands[p.band].mode, p.freq, freqStr, sizeof(freqStr));
+    snprintf(buf, n, "%02d  %s %s", idx + 1, freqStr, g_bands[p.band].name);
+}
+void labelMemorySlot(int idx, char *buf, size_t n) {
+    // Row set depends on whether the slot is filled. See the comment next
+    // to memorySlotItemCount() for the index mapping.
+    if (persistPresetIsValid(g_memorySlot)) {
+        switch (idx) {
+            case 0: snprintf(buf, n, "Load"); return;
+            case 1: snprintf(buf, n, "Save current"); return;
+            case 2: snprintf(buf, n, "Delete"); return;
+            default: if (n) buf[0] = 0; return;   // Back rendered by drawList
+        }
+    } else {
+        switch (idx) {
+            case 0: snprintf(buf, n, "Save current"); return;
+            default: if (n) buf[0] = 0; return;   // Back rendered by drawList
+        }
+    }
+}
 
 // --- Per-state drawers (all delegate to drawList) -------------------------
 
@@ -356,6 +422,18 @@ void drawSettingsMenu(TFT_eSPI& tft) {
 void drawBrightnessMenu(TFT_eSPI& tft) {
     drawList(tft, "Brightness", brightnessItemCount(), brightnessActiveIdx(),
              labelBrightness, brightnessItemIsBack, "* = active level");
+}
+void drawMemoryMenu(TFT_eSPI& tft) {
+    drawList(tft, "Memory", memoryItemCount(), -1,
+             labelMemory, memoryItemIsBack, "Click = open slot");
+}
+void drawMemorySlotMenu(TFT_eSPI& tft) {
+    // Title shows the one-based slot number so the user remembers which
+    // slot they just clicked into.
+    char title[24];
+    snprintf(title, sizeof(title), "Slot %02u", (unsigned)(g_memorySlot + 1));
+    drawList(tft, title, memorySlotItemCount(), -1,
+             labelMemorySlot, memorySlotItemIsBack, "Click = run action");
 }
 
 }  // namespace
@@ -419,6 +497,9 @@ void menuHandleClick() {
                 menuClose();
                 return;
             }
+            case CMD_MEMORY:
+                transitionTo(MENU_STATE_MEMORY);
+                return;
             case CMD_SETTINGS:
                 transitionTo(MENU_STATE_SETTINGS);
                 return;
@@ -550,6 +631,69 @@ void menuHandleClick() {
         g_dirty  = true;
         return;
     }
+
+    if (g_state == MENU_STATE_MEMORY) {
+        if (memoryItemIsBack(g_cursor)) {
+            transitionTo(MENU_STATE_TOP);
+            return;
+        }
+        g_memorySlot = (uint8_t)g_cursor;
+        transitionTo(MENU_STATE_MEMORY_SLOT);
+        return;
+    }
+
+    if (g_state == MENU_STATE_MEMORY_SLOT) {
+        if (memorySlotItemIsBack(g_cursor)) {
+            // Return to the Memory list with the cursor on the slot we just
+            // came from — same "preserve context" return pattern used by
+            // Brightness -> Settings above.
+            g_state  = MENU_STATE_MEMORY;
+            g_cursor = g_memorySlot;
+            g_dirty  = true;
+            return;
+        }
+        bool filled = persistPresetIsValid(g_memorySlot);
+        // Action index layout (see memorySlotItemCount / labelMemorySlot):
+        //   filled: 0=Load, 1=Save, 2=Delete
+        //   empty:  0=Save
+        if (filled && g_cursor == 0) {
+            // Load — tune the radio to the saved station and close the
+            // menu so the user hears the result immediately. Mirrors the
+            // band-picker close-on-click flow.
+            PresetSlot p = persistLoadPreset(g_memorySlot);
+            if (p.band < g_bandCount) {
+                radioSetBand(p.band);
+                radioSetFrequency(p.freq);
+                persistSaveBand(p.band);
+                persistSaveFrequency(p.band, p.freq);
+            }
+            menuClose();
+            return;
+        }
+        if ((filled && g_cursor == 1) || (!filled && g_cursor == 0)) {
+            // Save current — snapshot the live band+freq into this slot and
+            // stay in MEMORY_SLOT so the row labels can refresh (Load /
+            // Delete now become available). This matches the Settings
+            // toggles' "stay open" UX.
+            PresetSlot p;
+            p.valid = 1;
+            p.band  = radioGetBandIdx();
+            p.freq  = radioGetFrequency();
+            persistSavePreset(g_memorySlot, p);
+            g_dirty = true;
+            return;
+        }
+        if (filled && g_cursor == 2) {
+            // Delete — clear the slot and pop back to the Memory list so
+            // the user sees the "<empty>" label immediately.
+            persistClearPreset(g_memorySlot);
+            g_state  = MENU_STATE_MEMORY;
+            g_cursor = g_memorySlot;
+            g_dirty  = true;
+            return;
+        }
+        return;
+    }
 }
 
 bool menuTakeDirty() {
@@ -565,13 +709,15 @@ void menuDraw(TFT_eSPI& tft) {
     tft.fillScreen(COL_BG);
 
     switch (g_state) {
-        case MENU_STATE_TOP:        drawTopMenu(tft);        break;
-        case MENU_STATE_BAND:       drawBandMenu(tft);       break;
-        case MENU_STATE_BW:         drawBwMenu(tft);         break;
-        case MENU_STATE_AGC:        drawAgcMenu(tft);        break;
-        case MENU_STATE_THEME:      drawThemeMenu(tft);      break;
-        case MENU_STATE_SETTINGS:   drawSettingsMenu(tft);   break;
-        case MENU_STATE_BRIGHTNESS: drawBrightnessMenu(tft); break;
+        case MENU_STATE_TOP:         drawTopMenu(tft);         break;
+        case MENU_STATE_BAND:        drawBandMenu(tft);        break;
+        case MENU_STATE_BW:          drawBwMenu(tft);          break;
+        case MENU_STATE_AGC:         drawAgcMenu(tft);         break;
+        case MENU_STATE_THEME:       drawThemeMenu(tft);       break;
+        case MENU_STATE_SETTINGS:    drawSettingsMenu(tft);    break;
+        case MENU_STATE_BRIGHTNESS:  drawBrightnessMenu(tft);  break;
+        case MENU_STATE_MEMORY:      drawMemoryMenu(tft);      break;
+        case MENU_STATE_MEMORY_SLOT: drawMemorySlotMenu(tft);  break;
         default: break;
     }
 }

@@ -27,8 +27,6 @@ references plus gaps surfaced while building v1.
 - AM / SW / LW bands — `radio.cpp` API extension + UI band label.
 - SSB (LSB / USB) with BFO tuning — requires the library's SSB patch-load
   sequence, bigger lift.
-- Memory presets (Preferences / NVS). ATS-Mini uses `Preferences` with
-  versioning (`VER_SETTINGS`, `VER_BANDS`) — good pattern to copy.
 - Auto-seek (up / down on encoder long-press or touch gesture).
 - Mute toggle (encoder double-click).
 - Squelch by RSSI threshold.

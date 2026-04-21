@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Memory presets.** Long-press → **Memory** opens a 16-slot list where each
+  row shows the saved band + frequency ("01  102.4 MHz FM") or `<empty>`.
+  Clicking a slot descends into a per-slot action submenu with
+  `Load / Save current / Delete / Back`: **Save** snapshots the live
+  `band + freq` into the slot and stays in the submenu so the row label
+  refreshes immediately; **Delete** clears the slot and returns to the
+  list; **Load** tunes the radio to the saved station and closes the menu
+  to get out of the way. Slots store only `band + freq` on purpose —
+  BW/AGC stay per-mode (current behaviour) so loading a preset doesn't
+  silently overwrite the user's preferred filter for the whole mode.
+- **New pure helper `include/preset_pack.h`.** Packs a `PresetSlot`
+  (`valid / band / freq`) into a single `uint32_t` for NVS storage (bit
+  layout: valid=MSB, band=bits 19..16, freq=low 16 bits, bits 30..20
+  reserved for future per-slot metadata without a schema bump). Shared
+  between `persist.cpp` and the new native test suite.
+- **Persist schema v6.** 16 new `u32` keys — `preset0`..`preset15`, all
+  default `0` (= empty slot). Upgraders from v1 / v2 / v3 / v4 / v5 keep
+  their existing state and have the 16 preset keys seeded to empty;
+  wipe path seeds them too.
+- **`test_native_preset` Unity suite.** 12 host-side tests covering the
+  pack/unpack round-trip, bit-layout invariants, empty-slot encoding,
+  overflow masking (band >= 16), and forward-compat handling of the
+  reserved bits. Runs under the existing `pio test -e native` (~7 s total
+  across all suites) and the same CI gate in
+  [.github/workflows/ci.yml](.github/workflows/ci.yml).
+
 ## [2.5.0] - 2026-04-21
 
 ### Added
