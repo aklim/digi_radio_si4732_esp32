@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-04-21
+
 ### Added
 
 - **Header status icons.** Three compact indicators now render in the top
-  header zone — an "RDS" text badge on the left edge, the Bluetooth rune
-  (ATS-Mini 5-line glyph), and the WiFi fan (3 concentric arcs). Each is
-  hidden when its feature is off, drawn dim (`TH.rf_icon`) when enabled,
-  and drawn bright (`TH.rf_icon_conn`) on a live connection — for RDS
-  that means "chip reports sync"; for BT/WiFi the "connected" state is
-  reserved for a future PR that wires up the real radio stacks.
+  icon row — an RDS pictogram (two interlocking concentric-ring "stereo
+  swirls" drawn procedurally via `drawSmoothCircle` + `fillCircle`), the
+  Bluetooth rune (ATS-Mini 5-line glyph), and the WiFi fan (3 concentric
+  arcs). Each is hidden when its feature is off, drawn dim (`TH.rf_icon`)
+  when enabled, and drawn bright (`TH.rf_icon_conn`) on a live
+  connection — for RDS that means "chip reports sync"; for BT/WiFi the
+  "connected" state is reserved for a future PR that wires up the real
+  radio stacks.
 - **Settings submenu.** Long-press → **Settings** opens a new submenu
   with on/off toggles for RDS, Bluetooth, and WiFi. Unlike the Band /
   BW / AGC pickers, Settings stays open after a click so multiple
@@ -23,6 +27,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **Persist schema v4.** Three new `u8` keys — `rds_en` (default 1),
   `bt_en` (default 0), `wifi_en` (default 0). Upgraders from v1 / v2 /
   v3 keep their existing state; wipe path seeds defaults.
+- **connectivity.cpp / .h.** New module that tracks the user's
+  Bluetooth / WiFi preference and exposes ATS-Mini-signature
+  `getBleStatus()` / `getWiFiStatus()` for the header widgets. The
+  real BLE / WiFi stacks are not started in this release — the module
+  is a scaffold so follow-up PRs can drop a full stack in without
+  touching Draw / Layout code.
 
 ### Changed
 
@@ -32,6 +42,11 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   PS / RT / PI mirrors are cleared so the RDS zone falls back to the
   band scale. Re-enabling resumes normal operation within the next
   poll tick. Default remains "RDS on", matching prior firmware.
+- **Layout-Default paint order.** S-meter and stereo indicator now
+  render *before* the BLE / WiFi / RDS header icons so the S-meter's
+  `fillRect(0, 0, 211, 16, TH.bg)` clear doesn't erase icons sitting
+  inside the strip. Icons land in the free slots past the 83-px bar
+  extent or to the right of the S-meter band.
 
 ## [2.2.2] - 2026-04-19
 
@@ -350,7 +365,8 @@ to the TFT firmware; upgrade to the TFT shield or stay on
     [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
     on every `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.2...HEAD
+[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.1.0...v2.2.0
