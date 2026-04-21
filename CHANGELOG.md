@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-04-21
+
 ### Added
 
 - **Memory presets.** Long-press → **Memory** opens a 16-slot list where each
@@ -446,7 +448,8 @@ to the TFT firmware; upgrade to the TFT shield or stay on
     [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
     on every `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.2.2...v2.3.0
