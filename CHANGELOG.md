@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Changed
+
+- **Bluetooth and WiFi toggles are now real.** Flipping Bluetooth or
+  WiFi off in the Settings submenu physically (de)initializes the
+  ESP32 radios via `connectivity.cpp` instead of just hiding a header
+  icon — BT gets `btStop()` + `esp_bt_controller_disable()` +
+  `esp_bt_controller_deinit()`, WiFi gets `WiFi.mode(WIFI_OFF)`. Both
+  teardown paths no-op when the respective radio is already in its
+  idle/OFF default state, which is what Arduino-ESP32 boots into —
+  so fresh-boot power draw is unchanged and there is no one-way
+  `esp_bt_mem_release` call anywhere. Both flags default to off on
+  first boot for power saving. GATT / STA connect remain reserved for
+  a future PR, so `getBleStatus()` / `getWiFiStatus()` still only
+  return 0 or 1 and the header icons stay in the dim "enabled, not
+  connected" variant when on.
+
 ## [2.3.0] - 2026-04-21
 
 ### Added

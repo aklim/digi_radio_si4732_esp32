@@ -164,6 +164,11 @@ void setup() {
     Serial.begin(115200);
     Serial.println(F("Digital Radio (TFT) — starting up..."));
 
+    // Force BT + WiFi into their lowest-power state before any other module
+    // can reference those APIs. Persisted user preferences are re-applied
+    // below after persistInit(); on fresh NVS both default to off.
+    connectivityEarlyInit();
+
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
 
     initBacklight();
@@ -237,9 +242,9 @@ void setup() {
 
     // Restore persisted feature-enable flags. radioSetRdsEnabled takes the
     // radio mutex internally, so it must run after radioInit(). The BT/WiFi
-    // setters only flip a flag today (no stack), so ordering there is only
-    // "before drawLayoutDefault runs". Doing all three here keeps the wiring
-    // visible in one block.
+    // setters physically (re-)init the respective radios — cheap no-op here
+    // on fresh NVS since connectivityEarlyInit() already forced them off,
+    // non-trivial if the user had them enabled before reboot.
     radioSetRdsEnabled(persistLoadRdsEnabled() != 0);
     connectivitySetBtEnabled(persistLoadBtEnabled() != 0);
     connectivitySetWifiEnabled(persistLoadWifiEnabled() != 0);

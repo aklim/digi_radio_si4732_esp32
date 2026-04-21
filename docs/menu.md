@@ -129,9 +129,15 @@ Controls inside the menu:
   WiFi between On and Off and saves the new state to NVS; the submenu
   stays open so multiple toggles can be flipped without re-entering.
   Disabling RDS short-circuits the Si4735's RDS decoder and the Core-0
-  poll loop (no I²C traffic, PS/RT/PI mirrors cleared). Bluetooth and
-  WiFi flags only gate the header indicator icons today — the real
-  radio stacks land in follow-up PRs.
+  poll loop (no I²C traffic, PS/RT/PI mirrors cleared). Flipping
+  Bluetooth or WiFi physically (de)initializes the ESP32 controller /
+  modem via [src/connectivity.cpp](../src/connectivity.cpp), so "Off"
+  is a real power-saving state — BT gets `btStop` + controller
+  disable/deinit, WiFi gets `WiFi.mode(WIFI_OFF)`. Both default to Off
+  on first boot; on a fresh boot neither teardown path runs because
+  the radios are already idle by default. GATT / STA connect are still
+  reserved for follow-up PRs, so the header icons currently only light
+  up in the "enabled, not connected" (dim) variant.
 
 ## Persistence
 
