@@ -21,6 +21,8 @@
 
 #include <stdint.h>
 
+#include "preset_pack.h"   // PresetSlot + pack/unpack codec shared with tests
+
 // Bump this when the meaning of any persisted key changes. persistInit()
 // either applies a lazy upgrade (additive-only, keeps existing values) or
 // wipes and resets to defaults on anything else.
@@ -35,7 +37,9 @@
 //              wifi_en (WiFi enable, default 0)
 //   v5 — adds: bl_level (TFT backlight percent 0..100, default matches
 //              BACKLIGHT_DEFAULT_PERCENT from backlight.h)
-constexpr uint16_t PERSIST_SCHEMA_VER = 5;
+//   v6 — adds: preset<N> (memory preset slot, u32, default 0 = empty;
+//              see preset_pack.h for the bit layout)
+constexpr uint16_t PERSIST_SCHEMA_VER = 6;
 
 // Load cached values from NVS and apply the schema-version gate. Safe to
 // call before radioInit(); it does not touch the Si4735. Idempotent.
@@ -104,5 +108,20 @@ void    persistSaveWifiEnabled(uint8_t en);
 // defined in one place.
 uint8_t persistLoadBacklight();
 void    persistSaveBacklight(uint8_t percent);
+
+// --- Memory presets (v6) ---------------------------------------------------
+// 16 user-saved station slots. Each slot stores (band index, frequency in
+// the band's native units) — see preset_pack.h for the u32 bit layout.
+// Slots are initialised empty (valid=0) on every migration path and on a
+// fresh wipe; clearing a slot zeroes its u32.
+//
+// All preset setters flush immediately (menu-driven, low-frequency); there
+// is no rate-limit coalescing for this family.
+constexpr uint8_t PRESET_SLOT_COUNT = 16;
+
+PresetSlot persistLoadPreset(uint8_t slot);          // out-of-range -> {0,0,0}
+void       persistSavePreset(uint8_t slot, PresetSlot p);
+void       persistClearPreset(uint8_t slot);
+bool       persistPresetIsValid(uint8_t slot);
 
 #endif  // PERSIST_H

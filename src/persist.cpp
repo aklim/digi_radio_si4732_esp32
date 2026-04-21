@@ -31,6 +31,8 @@
 //   wifi_en       u8    WiFi enable (v4+, default 0)
 //   bl_level      u8    TFT backlight percent 0..100
 //                       (v5+, default BACKLIGHT_DEFAULT_PERCENT)
+//   preset<N>     u32   memory preset slot (N = 0..15; v6+, default 0 = empty;
+//                       see preset_pack.h for the bit layout)
 // ============================================================================
 
 #include "persist.h"
@@ -65,6 +67,7 @@ uint8_t  g_btEn           = 0;
 uint8_t  g_wifiEn         = 0;
 uint8_t  g_blLevel        = BACKLIGHT_DEFAULT_PERCENT;
 uint16_t g_freq[MAX_BANDS_PERSISTED] = {0};
+uint32_t g_presets[PRESET_SLOT_COUNT] = {0};   // raw packed slot (see preset_pack.h)
 
 // --- Dirty bookkeeping ------------------------------------------------------
 bool          g_bandDirty  = false;
@@ -79,6 +82,7 @@ bool          g_btEnDirty   = false;
 bool          g_wifiEnDirty = false;
 bool          g_blLevelDirty = false;
 bool          g_freqDirty[MAX_BANDS_PERSISTED] = {false};
+bool          g_presetDirty[PRESET_SLOT_COUNT]  = {false};
 unsigned long g_lastBandWrite  = 0;
 unsigned long g_lastVolWrite   = 0;
 unsigned long g_lastThemeWrite = 0;
@@ -91,6 +95,7 @@ unsigned long g_lastBtEnWrite   = 0;
 unsigned long g_lastWifiEnWrite = 0;
 unsigned long g_lastBlLevelWrite = 0;
 unsigned long g_lastFreqWrite[MAX_BANDS_PERSISTED] = {0};
+unsigned long g_lastPresetWrite[PRESET_SLOT_COUNT]  = {0};
 
 bool ensureOpen() {
     if (g_opened) return true;
@@ -189,6 +194,16 @@ void commitFrequency(uint8_t idx) {
     g_lastFreqWrite[idx] = millis();
 }
 
+void commitPreset(uint8_t idx) {
+    if (idx >= PRESET_SLOT_COUNT) return;
+    if (!g_presetDirty[idx] || !ensureOpen()) return;
+    char key[12];
+    snprintf(key, sizeof(key), "preset%u", (unsigned)idx);
+    g_prefs.putULong(key, g_presets[idx]);
+    g_presetDirty[idx]     = false;
+    g_lastPresetWrite[idx] = millis();
+}
+
 // Commit any key whose dirty-age has reached the rate-limit threshold.
 void maybeFlushExpired() {
     unsigned long now = millis();
@@ -208,6 +223,11 @@ void maybeFlushExpired() {
             commitFrequency(i);
         }
     }
+    for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+        if (g_presetDirty[i] && (now - g_lastPresetWrite[i] >= PERSIST_MIN_WRITE_MS)) {
+            commitPreset(i);
+        }
+    }
 }
 
 }  // namespace
@@ -225,11 +245,11 @@ void persistInit() {
         // the namespace as already-current.
         Serial.println(F("[persist] first boot; initialising namespace"));
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 1 && PERSIST_SCHEMA_VER == 5) {
-        // v1 -> v5 additive: seed theme plus all v3 BW/AGC keys plus the
-        // v4 feature-enable flags plus the v5 backlight level. Band / vol /
-        // freq survive as-is.
-        Serial.println(F("[persist] upgrading schema v1 -> v5"));
+    } else if (ver == 1 && PERSIST_SCHEMA_VER == 6) {
+        // v1 -> v6 additive: seed theme plus all v3 BW/AGC keys plus the
+        // v4 feature-enable flags plus the v5 backlight level plus the v6
+        // memory-preset slots. Band / vol / freq survive as-is.
+        Serial.println(F("[persist] upgrading schema v1 -> v6"));
         g_prefs.putUChar("theme",    0);
         g_prefs.putUChar("bw_fm",    0);
         g_prefs.putUChar("bw_am",    4);
@@ -239,11 +259,15 @@ void persistInit() {
         g_prefs.putUChar("bt_en",    0);
         g_prefs.putUChar("wifi_en",  0);
         g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
+        for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+            char key[12]; snprintf(key, sizeof(key), "preset%u", (unsigned)i);
+            g_prefs.putULong(key, 0u);
+        }
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 2 && PERSIST_SCHEMA_VER == 5) {
-        // v2 -> v5 adds the BW/AGC per-mode indices, the v4 flags, and the
-        // v5 backlight level.
-        Serial.println(F("[persist] upgrading schema v2 -> v5"));
+    } else if (ver == 2 && PERSIST_SCHEMA_VER == 6) {
+        // v2 -> v6 adds the BW/AGC per-mode indices, the v4 flags, the
+        // v5 backlight level, and the v6 memory-preset slots.
+        Serial.println(F("[persist] upgrading schema v2 -> v6"));
         g_prefs.putUChar("bw_fm",    0);
         g_prefs.putUChar("bw_am",    4);
         g_prefs.putUChar("agc_fm",   0);
@@ -252,23 +276,46 @@ void persistInit() {
         g_prefs.putUChar("bt_en",    0);
         g_prefs.putUChar("wifi_en",  0);
         g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
+        for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+            char key[12]; snprintf(key, sizeof(key), "preset%u", (unsigned)i);
+            g_prefs.putULong(key, 0u);
+        }
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 3 && PERSIST_SCHEMA_VER == 5) {
-        // v3 -> v5 adds the feature-enable flags and the backlight level.
-        Serial.println(F("[persist] upgrading schema v3 -> v5"));
+    } else if (ver == 3 && PERSIST_SCHEMA_VER == 6) {
+        // v3 -> v6 adds the feature-enable flags, the backlight level, and
+        // the memory-preset slots.
+        Serial.println(F("[persist] upgrading schema v3 -> v6"));
         g_prefs.putUChar("rds_en",   1);
         g_prefs.putUChar("bt_en",    0);
         g_prefs.putUChar("wifi_en",  0);
         g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
+        for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+            char key[12]; snprintf(key, sizeof(key), "preset%u", (unsigned)i);
+            g_prefs.putULong(key, 0u);
+        }
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 4 && PERSIST_SCHEMA_VER == 5) {
-        // v4 -> v5 adds only the backlight level. Default matches the
-        // previous-firmware experience: v4 units booted at a hard-coded
-        // 86% duty (~220/255); on upgrade we drop them to the new default
-        // of BACKLIGHT_DEFAULT_PERCENT so the power-saving win is
-        // immediately visible. The user can raise it via Settings.
-        Serial.println(F("[persist] upgrading schema v4 -> v5"));
+    } else if (ver == 4 && PERSIST_SCHEMA_VER == 6) {
+        // v4 -> v6 adds the backlight level and the memory-preset slots.
+        // Backlight default matches the v5 migration: v4 units booted at a
+        // hard-coded 86% duty (~220/255) and the power-reduction PR dropped
+        // the default to BACKLIGHT_DEFAULT_PERCENT, so upgraders land on
+        // the new lower default immediately.
+        Serial.println(F("[persist] upgrading schema v4 -> v6"));
         g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
+        for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+            char key[12]; snprintf(key, sizeof(key), "preset%u", (unsigned)i);
+            g_prefs.putULong(key, 0u);
+        }
+        g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
+    } else if (ver == 5 && PERSIST_SCHEMA_VER == 6) {
+        // v5 -> v6 adds only the 16 memory-preset slots. All other keys
+        // from v5 (band / vol / freq / theme / BW / AGC / feature flags /
+        // bl_level) survive untouched.
+        Serial.println(F("[persist] upgrading schema v5 -> v6"));
+        for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+            char key[12]; snprintf(key, sizeof(key), "preset%u", (unsigned)i);
+            g_prefs.putULong(key, 0u);
+        }
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
     } else if (ver != PERSIST_SCHEMA_VER) {
         Serial.print(F("[persist] schema mismatch (stored="));
@@ -316,6 +363,16 @@ void persistInit() {
         snprintf(key, sizeof(key), "freq%u", (unsigned)i);
         g_freq[i] = g_prefs.getUShort(key, 0);
     }
+
+    // v6 memory presets. Missing keys (e.g. a freshly-wiped namespace before
+    // the migration branches above have seeded them, or a hand-rolled partial
+    // state) decode to 0 which presetUnpack() renders as an empty slot, so
+    // the UI shows "<empty>" rather than garbage.
+    for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+        char key[12];
+        snprintf(key, sizeof(key), "preset%u", (unsigned)i);
+        g_presets[i] = g_prefs.getULong(key, 0u);
+    }
 }
 
 void persistFlush() {
@@ -332,6 +389,9 @@ void persistFlush() {
     if (g_blLevelDirty) commitBlLevel();
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         if (g_freqDirty[i]) commitFrequency(i);
+    }
+    for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+        if (g_presetDirty[i]) commitPreset(i);
     }
 }
 
@@ -473,4 +533,38 @@ void persistSaveBacklight(uint8_t percent) {
     // change) — flush immediately, matching the theme/toggle pattern.
     commitBlLevel();
     maybeFlushExpired();
+}
+
+// --- Memory presets (v6) ---------------------------------------------------
+// Save / clear are menu-driven so flush immediately like theme/band; no
+// rate-limit coalescing is needed for this family. Load is a pure RAM
+// read — the raw u32 is decoded through preset_pack.h.
+
+PresetSlot persistLoadPreset(uint8_t slot) {
+    if (slot >= PRESET_SLOT_COUNT) return PresetSlot{0, 0, 0};
+    return presetUnpack(g_presets[slot]);
+}
+
+void persistSavePreset(uint8_t slot, PresetSlot p) {
+    if (slot >= PRESET_SLOT_COUNT) return;
+    uint32_t raw = presetPack(p);
+    if (raw == g_presets[slot]) return;
+    g_presets[slot]      = raw;
+    g_presetDirty[slot]  = true;
+    commitPreset(slot);
+    maybeFlushExpired();
+}
+
+void persistClearPreset(uint8_t slot) {
+    if (slot >= PRESET_SLOT_COUNT) return;
+    if (g_presets[slot] == 0u) return;
+    g_presets[slot]     = 0u;
+    g_presetDirty[slot] = true;
+    commitPreset(slot);
+    maybeFlushExpired();
+}
+
+bool persistPresetIsValid(uint8_t slot) {
+    if (slot >= PRESET_SLOT_COUNT) return false;
+    return (g_presets[slot] & PRESET_VALID_BIT) != 0u;
 }
