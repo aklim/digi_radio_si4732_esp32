@@ -1,20 +1,26 @@
 // ============================================================================
-// connectivity.h — Bluetooth / WiFi enable-flag scaffold.
+// connectivity.h — Bluetooth / WiFi power control + enable-flag tracking.
 //
-// This module is intentionally tiny today: it only tracks whether the user
-// has enabled Bluetooth and/or WiFi in the Settings menu. The real ESP32
-// radio stacks (BLE serial / A2DP sink on the BT side; STA / AP on the
-// WiFi side) are not brought up in this build — that belongs to separate,
-// much larger PRs.
+// This module owns the ESP32 BT controller and WiFi modem on behalf of the
+// Settings menu. The Arduino-ESP32 core does not auto-start either radio at
+// boot, but once app code references WiFi / BT APIs the default modes draw
+// idle current. We force both into their lowest-power state at the top of
+// setup() (see connectivityEarlyInit) and then re-apply the user's persisted
+// preference once NVS has been loaded.
 //
-// The `getBleStatus()` / `getWiFiStatus()` functions return a 3-valued
-// int8_t matching the ATS-Mini signature (0 = off, 1 = enabled but not
-// connected, 2 = connected to a peer/AP). In this build the return value
-// is always 0 or 1 based solely on the persisted enable flag. Future
-// connectivity PRs upgrade the return to 2 when the real stack reports a
-// link — the header indicator widgets (Draw.cpp) already switch from
-// TH.rf_icon (dim) to TH.rf_icon_conn (bright) on status==2, so no UI
-// changes will be needed when that lands.
+// Flag semantics (persisted as bt_en / wifi_en in NVS schema v4; both
+// default to 0 on first boot for power-saving):
+//   false — WiFi.mode(WIFI_OFF); BT controller stopped + deinit + BTDM
+//           memory released. Header icons hidden.
+//   true  — WiFi.mode(WIFI_STA) (no .begin()); BT controller initialized +
+//           enabled in BLE mode (no advertising / no GATT). Header icons
+//           drawn in TH.rf_icon (dim).
+//
+// `getBleStatus()` / `getWiFiStatus()` return an ATS-Mini-signature int8_t:
+//   0 — off (icon is not drawn)
+//   1 — enabled, not connected (icon drawn in TH.rf_icon)
+//   2 — connected (icon drawn in TH.rf_icon_conn) — reserved for future PRs
+//       that wire up real BLE GATT / WiFi STA connect.
 // ============================================================================
 
 #ifndef CONNECTIVITY_H
@@ -22,8 +28,17 @@
 
 #include <stdint.h>
 
-// Persist the flag and (eventually) start / stop the underlying radio
-// stack. Safe to call from any context; no RTOS primitives are held.
+// Force BT and WiFi into their lowest-power state. Must be called once, very
+// early in setup() — before any other code references WiFi / BT APIs and
+// before persisted flags are applied. Idempotent but cheapest when called
+// exactly once. Leaves the internal enable-flag shadows at their default
+// (false); the persisted user preference is applied later via the setters.
+void connectivityEarlyInit();
+
+// Persist the flag and drive the underlying radio stack accordingly. Safe to
+// call from any context (no RTOS primitives held). Idempotent — repeated
+// calls with the same value re-assert the hardware state without side
+// effects.
 void connectivitySetBtEnabled(bool enabled);
 void connectivitySetWifiEnabled(bool enabled);
 
@@ -32,10 +47,7 @@ bool connectivityGetBtEnabled();
 bool connectivityGetWifiEnabled();
 
 // ATS-Mini-signature status getters — consumed directly by drawBleIndicator
-// / drawWiFiIndicator. Returns:
-//   0 — off (icon is not drawn)
-//   1 — enabled, not connected (icon drawn in TH.rf_icon)
-//   2 — connected (icon drawn in TH.rf_icon_conn)
+// / drawWiFiIndicator. See the file-level comment for the 0/1/2 legend.
 int8_t getBleStatus();
 int8_t getWiFiStatus();
 

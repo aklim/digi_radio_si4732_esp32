@@ -169,13 +169,20 @@ doesn't hammer flash. `persistFlush()` forces any pending writes out
 
 ## `main.cpp` — top-level
 
-`setup()` order: Serial → `Wire.begin` → `initBacklight()` →
+`setup()` order: Serial → **`connectivityEarlyInit()`** (named
+landmark at the top of setup(); today a no-op because BT is IDLE and
+WiFi is WIFI_OFF by default on Arduino-ESP32 — reserved as the hook
+for future pre-NVS BT/WiFi lifecycle tweaks) → `Wire.begin` →
+`initBacklight()` →
 `initDisplay()` → `initGauge()` (needle sprite) →
 `tft.setTouch(TOUCH_CALIBRATION)` → splash → 500 ms RC-reset wait →
 `persistInit()` (load saved state + seed `g_bands[].currentFreq`) →
 `radioInit()` (creates mutex, powers up chip, tunes) →
-`radioSetBand(saved)` / `radioSetVolume(saved)` → **`radioStart()`**
-(launches Core 0 polling task) → `encoderInit()` →
+`radioSetRdsEnabled(saved)` + `connectivitySetBtEnabled(saved)` +
+`connectivitySetWifiEnabled(saved)` (re-apply persisted user flags —
+the connectivity setters physically (re-)init the ESP32 radios to
+match) → `radioSetBand(saved)` / `radioSetVolume(saved)` →
+**`radioStart()`** (launches Core 0 polling task) → `encoderInit()` →
 `encoderSetBoundsForMode(...)` → first full paint.
 
 `loop()` routes input to the menu when `menuIsOpen()`, otherwise to

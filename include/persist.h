@@ -85,8 +85,10 @@ void    persistSaveAgcAm(uint8_t idx);
 // --- Feature enable flags (v4) ---------------------------------------------
 // Stored as u8 (0/1). Defaults: RDS on, Bluetooth off, WiFi off.
 // RDS-off short-circuits the I²C poll loop in radio.cpp; BT/WiFi flags are
-// consumed by connectivity.cpp (the real stacks are not implemented yet —
-// flags currently only gate the header indicator icons).
+// consumed by connectivity.cpp, which physically (de)initializes the ESP32
+// BT controller + WiFi modem to match. GATT / STA connect are still reserved
+// for future PRs — today the "enabled" state just means "controller up,
+// idle", which is why the header icons only use the dim variant.
 uint8_t persistLoadRdsEnabled();
 void    persistSaveRdsEnabled(uint8_t en);
 uint8_t persistLoadBtEnabled();
