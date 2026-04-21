@@ -29,10 +29,13 @@
 //   rds_en        u8    RDS decode enable (v4+, default 1)
 //   bt_en         u8    Bluetooth enable (v4+, default 0)
 //   wifi_en       u8    WiFi enable (v4+, default 0)
+//   bl_level      u8    TFT backlight percent 0..100
+//                       (v5+, default BACKLIGHT_DEFAULT_PERCENT)
 // ============================================================================
 
 #include "persist.h"
-#include "radio.h"   // g_bandCount, MAX_VOLUME
+#include "radio.h"       // g_bandCount, MAX_VOLUME
+#include "backlight.h"   // BACKLIGHT_DEFAULT_PERCENT
 
 #include <Arduino.h>
 #include <Preferences.h>
@@ -60,6 +63,7 @@ uint8_t  g_agcAm          = 0;
 uint8_t  g_rdsEn          = 1;
 uint8_t  g_btEn           = 0;
 uint8_t  g_wifiEn         = 0;
+uint8_t  g_blLevel        = BACKLIGHT_DEFAULT_PERCENT;
 uint16_t g_freq[MAX_BANDS_PERSISTED] = {0};
 
 // --- Dirty bookkeeping ------------------------------------------------------
@@ -73,6 +77,7 @@ bool          g_agcAmDirty = false;
 bool          g_rdsEnDirty  = false;
 bool          g_btEnDirty   = false;
 bool          g_wifiEnDirty = false;
+bool          g_blLevelDirty = false;
 bool          g_freqDirty[MAX_BANDS_PERSISTED] = {false};
 unsigned long g_lastBandWrite  = 0;
 unsigned long g_lastVolWrite   = 0;
@@ -84,6 +89,7 @@ unsigned long g_lastAgcAmWrite = 0;
 unsigned long g_lastRdsEnWrite  = 0;
 unsigned long g_lastBtEnWrite   = 0;
 unsigned long g_lastWifiEnWrite = 0;
+unsigned long g_lastBlLevelWrite = 0;
 unsigned long g_lastFreqWrite[MAX_BANDS_PERSISTED] = {0};
 
 bool ensureOpen() {
@@ -166,6 +172,13 @@ void commitWifiEn() {
     g_lastWifiEnWrite = millis();
 }
 
+void commitBlLevel() {
+    if (!g_blLevelDirty || !ensureOpen()) return;
+    g_prefs.putUChar("bl_level", g_blLevel);
+    g_blLevelDirty     = false;
+    g_lastBlLevelWrite = millis();
+}
+
 void commitFrequency(uint8_t idx) {
     if (idx >= MAX_BANDS_PERSISTED) return;
     if (!g_freqDirty[idx] || !ensureOpen()) return;
@@ -189,6 +202,7 @@ void maybeFlushExpired() {
     if (g_rdsEnDirty  && (now - g_lastRdsEnWrite  >= PERSIST_MIN_WRITE_MS)) commitRdsEn();
     if (g_btEnDirty   && (now - g_lastBtEnWrite   >= PERSIST_MIN_WRITE_MS)) commitBtEn();
     if (g_wifiEnDirty && (now - g_lastWifiEnWrite >= PERSIST_MIN_WRITE_MS)) commitWifiEn();
+    if (g_blLevelDirty && (now - g_lastBlLevelWrite >= PERSIST_MIN_WRITE_MS)) commitBlLevel();
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         if (g_freqDirty[i] && (now - g_lastFreqWrite[i] >= PERSIST_MIN_WRITE_MS)) {
             commitFrequency(i);
@@ -211,38 +225,50 @@ void persistInit() {
         // the namespace as already-current.
         Serial.println(F("[persist] first boot; initialising namespace"));
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 1 && PERSIST_SCHEMA_VER == 4) {
-        // v1 -> v4 additive: seed theme plus all v3 BW/AGC keys plus the
-        // v4 feature-enable flags. Band / vol / freq survive as-is.
-        Serial.println(F("[persist] upgrading schema v1 -> v4"));
-        g_prefs.putUChar("theme",   0);
-        g_prefs.putUChar("bw_fm",   0);
-        g_prefs.putUChar("bw_am",   4);
-        g_prefs.putUChar("agc_fm",  0);
-        g_prefs.putUChar("agc_am",  0);
-        g_prefs.putUChar("rds_en",  1);
-        g_prefs.putUChar("bt_en",   0);
-        g_prefs.putUChar("wifi_en", 0);
+    } else if (ver == 1 && PERSIST_SCHEMA_VER == 5) {
+        // v1 -> v5 additive: seed theme plus all v3 BW/AGC keys plus the
+        // v4 feature-enable flags plus the v5 backlight level. Band / vol /
+        // freq survive as-is.
+        Serial.println(F("[persist] upgrading schema v1 -> v5"));
+        g_prefs.putUChar("theme",    0);
+        g_prefs.putUChar("bw_fm",    0);
+        g_prefs.putUChar("bw_am",    4);
+        g_prefs.putUChar("agc_fm",   0);
+        g_prefs.putUChar("agc_am",   0);
+        g_prefs.putUChar("rds_en",   1);
+        g_prefs.putUChar("bt_en",    0);
+        g_prefs.putUChar("wifi_en",  0);
+        g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 2 && PERSIST_SCHEMA_VER == 4) {
-        // v2 -> v4 adds the BW/AGC per-mode indices and the v4 flags.
-        Serial.println(F("[persist] upgrading schema v2 -> v4"));
-        g_prefs.putUChar("bw_fm",   0);
-        g_prefs.putUChar("bw_am",   4);
-        g_prefs.putUChar("agc_fm",  0);
-        g_prefs.putUChar("agc_am",  0);
-        g_prefs.putUChar("rds_en",  1);
-        g_prefs.putUChar("bt_en",   0);
-        g_prefs.putUChar("wifi_en", 0);
+    } else if (ver == 2 && PERSIST_SCHEMA_VER == 5) {
+        // v2 -> v5 adds the BW/AGC per-mode indices, the v4 flags, and the
+        // v5 backlight level.
+        Serial.println(F("[persist] upgrading schema v2 -> v5"));
+        g_prefs.putUChar("bw_fm",    0);
+        g_prefs.putUChar("bw_am",    4);
+        g_prefs.putUChar("agc_fm",   0);
+        g_prefs.putUChar("agc_am",   0);
+        g_prefs.putUChar("rds_en",   1);
+        g_prefs.putUChar("bt_en",    0);
+        g_prefs.putUChar("wifi_en",  0);
+        g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 3 && PERSIST_SCHEMA_VER == 4) {
-        // v3 -> v4 adds only the feature-enable flags. Defaults match the
-        // prior firmware behaviour (RDS on, BT/WiFi off) so upgraded units
-        // see no user-visible change until they open the Settings menu.
-        Serial.println(F("[persist] upgrading schema v3 -> v4"));
-        g_prefs.putUChar("rds_en",  1);
-        g_prefs.putUChar("bt_en",   0);
-        g_prefs.putUChar("wifi_en", 0);
+    } else if (ver == 3 && PERSIST_SCHEMA_VER == 5) {
+        // v3 -> v5 adds the feature-enable flags and the backlight level.
+        Serial.println(F("[persist] upgrading schema v3 -> v5"));
+        g_prefs.putUChar("rds_en",   1);
+        g_prefs.putUChar("bt_en",    0);
+        g_prefs.putUChar("wifi_en",  0);
+        g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
+        g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
+    } else if (ver == 4 && PERSIST_SCHEMA_VER == 5) {
+        // v4 -> v5 adds only the backlight level. Default matches the
+        // previous-firmware experience: v4 units booted at a hard-coded
+        // 86% duty (~220/255); on upgrade we drop them to the new default
+        // of BACKLIGHT_DEFAULT_PERCENT so the power-saving win is
+        // immediately visible. The user can raise it via Settings.
+        Serial.println(F("[persist] upgrading schema v4 -> v5"));
+        g_prefs.putUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
     } else if (ver != PERSIST_SCHEMA_VER) {
         Serial.print(F("[persist] schema mismatch (stored="));
@@ -278,6 +304,13 @@ void persistInit() {
     g_btEn   = g_prefs.getUChar("bt_en",   0);
     g_wifiEn = g_prefs.getUChar("wifi_en", 0);
 
+    // v5 backlight level. Clamped to 0..100 on load — the stored value
+    // always comes from persistSaveBacklight() which clamps, but guarding
+    // here too means a corrupted NVS entry can't drive ledcWrite() with a
+    // garbage duty (the backlight module clamps internally too).
+    g_blLevel = g_prefs.getUChar("bl_level", BACKLIGHT_DEFAULT_PERCENT);
+    if (g_blLevel > 100) g_blLevel = BACKLIGHT_DEFAULT_PERCENT;
+
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         char key[8];
         snprintf(key, sizeof(key), "freq%u", (unsigned)i);
@@ -296,6 +329,7 @@ void persistFlush() {
     if (g_rdsEnDirty)  commitRdsEn();
     if (g_btEnDirty)   commitBtEn();
     if (g_wifiEnDirty) commitWifiEn();
+    if (g_blLevelDirty) commitBlLevel();
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         if (g_freqDirty[i]) commitFrequency(i);
     }
@@ -425,5 +459,18 @@ void persistSaveWifiEnabled(uint8_t en) {
     g_wifiEn      = v;
     g_wifiEnDirty = true;
     commitWifiEn();
+    maybeFlushExpired();
+}
+
+uint8_t persistLoadBacklight() { return g_blLevel; }
+
+void persistSaveBacklight(uint8_t percent) {
+    if (percent > 100) percent = 100;
+    if (percent == g_blLevel) return;
+    g_blLevel      = percent;
+    g_blLevelDirty = true;
+    // Brightness changes are low-frequency menu actions (one click per
+    // change) — flush immediately, matching the theme/toggle pattern.
+    commitBlLevel();
     maybeFlushExpired();
 }

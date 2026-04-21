@@ -33,7 +33,9 @@
 //   v4 — adds: rds_en (RDS decode enable, default 1),
 //              bt_en  (Bluetooth enable, default 0),
 //              wifi_en (WiFi enable, default 0)
-constexpr uint16_t PERSIST_SCHEMA_VER = 4;
+//   v5 — adds: bl_level (TFT backlight percent 0..100, default matches
+//              BACKLIGHT_DEFAULT_PERCENT from backlight.h)
+constexpr uint16_t PERSIST_SCHEMA_VER = 5;
 
 // Load cached values from NVS and apply the schema-version gate. Safe to
 // call before radioInit(); it does not touch the Si4735. Idempotent.
@@ -95,5 +97,12 @@ uint8_t persistLoadBtEnabled();
 void    persistSaveBtEnabled(uint8_t en);
 uint8_t persistLoadWifiEnabled();
 void    persistSaveWifiEnabled(uint8_t en);
+
+// --- Backlight brightness (v5) ---------------------------------------------
+// Stored as u8 in whole percent (0..100). Default seeded by every migration
+// path matches BACKLIGHT_DEFAULT_PERCENT from backlight.h so the default is
+// defined in one place.
+uint8_t persistLoadBacklight();
+void    persistSaveBacklight(uint8_t percent);
 
 #endif  // PERSIST_H

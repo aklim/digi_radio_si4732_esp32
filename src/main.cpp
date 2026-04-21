@@ -41,6 +41,7 @@
 #include "Draw.h"
 #include "Scan.h"
 #include "connectivity.h"
+#include "backlight.h"
 
 #include "version.h"
 
@@ -67,11 +68,13 @@ static const GFXfont* const VALUE_FONT  = &FreeSansBold9pt7b;   // ~13 px cap he
 constexpr uint8_t PIN_I2C_SDA = 21;
 constexpr uint8_t PIN_I2C_SCL = 22;
 
-// Backlight PWM (LEDC — matches the pattern from test_shield.cpp).
-constexpr uint8_t  BL_LEDC_CHANNEL  = 0;
-constexpr uint32_t BL_LEDC_FREQ_HZ  = 5000;
-constexpr uint8_t  BL_LEDC_RES_BITS = 8;
-constexpr uint8_t  BL_DEFAULT_DUTY  = 220;
+// Target CPU frequency for the lowest-power state compatible with WiFi/BT.
+// 80 MHz is the documented minimum for the Espressif WiFi/BT stacks and is
+// an order of magnitude more than this firmware needs: no DSP, no I2S audio,
+// Si4732 I²C is only 100 kHz, TFT_eSPI runs on the hardware SPI peripheral,
+// and the rotary encoder is fully ISR-driven. Measurable Icc drop at the
+// battery vs. the Arduino-ESP32 default of 240 MHz.
+constexpr uint32_t CPU_TARGET_MHZ = 80;
 
 // Hard-coded XPT2046 calibration — produced once by tft.calibrateTouch() on
 // this specific shield; see src/test_shield.cpp where the same constants
@@ -141,7 +144,6 @@ static long g_menuEncLast = 0;
 // Section 4: Forward declarations
 // ============================================================================
 
-static void initBacklight();
 static void initDisplay();
 static void drawSplash();
 
@@ -162,6 +164,14 @@ void setup() {
     asm volatile("" : : "r"(FW_IDENTITY));
 
     Serial.begin(115200);
+
+    // Drop the CPU clock to the minimum that still satisfies the WiFi/BT
+    // stacks. Must run before any task is started so the FreeRTOS tick
+    // accounting picks up the right reference clock. Logged so the actual
+    // applied frequency is visible even if the target value silently
+    // falls back (e.g. a future port to a chip that doesn't support 80).
+    setCpuFrequencyMhz(CPU_TARGET_MHZ);
+    Serial.printf("[main] CPU freq: %u MHz\n", (unsigned)getCpuFrequencyMhz());
     Serial.println(F("Digital Radio (TFT) — starting up..."));
 
     // Force BT + WiFi into their lowest-power state before any other module
@@ -171,8 +181,16 @@ void setup() {
 
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
 
-    initBacklight();
+    // initDisplay() runs first because TFT_eSPI's tft.init() unconditionally
+    // does `pinMode(TFT_BL, OUTPUT); digitalWrite(TFT_BL, HIGH)` when both
+    // TFT_BL and TFT_BACKLIGHT_ON are defined in User_Setup.h — and that
+    // pinMode detaches the GPIO matrix route any prior ledcAttachPin set up,
+    // so the LEDC PWM would never reach the pin. backlightInit() runs
+    // afterwards so its ledcAttachPin re-routes the pin to LEDC channel 0.
+    // (Without this ordering the panel is pegged at 100% regardless of the
+    // duty value ledcWrite() holds.)
     initDisplay();
+    backlightInit();
     tft.setTouch(TOUCH_CALIBRATION);
     drawSplash();
 
@@ -199,6 +217,12 @@ void setup() {
     // chip is powered up and avoid an extra retune on boot. First-boot
     // loads return 0 / default values.
     persistInit();
+
+    // Apply the user's saved brightness immediately so only the splash is
+    // visible at the built-in default — the main UI comes up at the chosen
+    // level. Done before any further setup work so bright "install flashes"
+    // on a battery-powered unit are limited to the first ~200 ms.
+    backlightApply(persistLoadBacklight());
 
     // Restore the user's chosen palette before any draw runs so the very
     // first fillScreen picks up the right background. Out-of-range
@@ -356,6 +380,15 @@ void loop() {
     } else if (menuTakeDirty()) {
         menuDraw(tft);
     }
+
+    // Yield to the FreeRTOS idle task on Core 1. Without this, loopTask
+    // (priority 1) preempts the idle task continuously — even when every
+    // early-out above fires — pinning the core at full clock. A single
+    // tick of idle per loop iteration lets the scheduler enter the
+    // light-sleep-capable idle path. UI responsiveness is unaffected:
+    // the encoder is ISR-buffered, touch is debounced to 200 ms, and the
+    // radio poll task runs independently on Core 0.
+    vTaskDelay(1);
 }
 
 // ============================================================================
@@ -463,12 +496,6 @@ static void handleTouch() {
 // ============================================================================
 // Section 7: Display
 // ============================================================================
-
-static void initBacklight() {
-    ledcSetup(BL_LEDC_CHANNEL, BL_LEDC_FREQ_HZ, BL_LEDC_RES_BITS);
-    ledcAttachPin(TFT_BL, BL_LEDC_CHANNEL);
-    ledcWrite(BL_LEDC_CHANNEL, BL_DEFAULT_DUTY);
-}
 
 static void initDisplay() {
     tft.init();
