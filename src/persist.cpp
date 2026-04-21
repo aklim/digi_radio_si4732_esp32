@@ -26,6 +26,9 @@
 //   bw_am         u8    AM/SW IF-filter index (v3+, default 4 = 3.0k)
 //   agc_fm        u8    FM AGC/attenuator index (v3+, 0 = AGC on, default 0)
 //   agc_am        u8    AM/SW AGC/attenuator index (v3+, 0 = AGC on, default 0)
+//   rds_en        u8    RDS decode enable (v4+, default 1)
+//   bt_en         u8    Bluetooth enable (v4+, default 0)
+//   wifi_en       u8    WiFi enable (v4+, default 0)
 // ============================================================================
 
 #include "persist.h"
@@ -54,6 +57,9 @@ uint8_t  g_bwFm           = 0;
 uint8_t  g_bwAm           = 4;
 uint8_t  g_agcFm          = 0;
 uint8_t  g_agcAm          = 0;
+uint8_t  g_rdsEn          = 1;
+uint8_t  g_btEn           = 0;
+uint8_t  g_wifiEn         = 0;
 uint16_t g_freq[MAX_BANDS_PERSISTED] = {0};
 
 // --- Dirty bookkeeping ------------------------------------------------------
@@ -64,6 +70,9 @@ bool          g_bwFmDirty  = false;
 bool          g_bwAmDirty  = false;
 bool          g_agcFmDirty = false;
 bool          g_agcAmDirty = false;
+bool          g_rdsEnDirty  = false;
+bool          g_btEnDirty   = false;
+bool          g_wifiEnDirty = false;
 bool          g_freqDirty[MAX_BANDS_PERSISTED] = {false};
 unsigned long g_lastBandWrite  = 0;
 unsigned long g_lastVolWrite   = 0;
@@ -72,6 +81,9 @@ unsigned long g_lastBwFmWrite  = 0;
 unsigned long g_lastBwAmWrite  = 0;
 unsigned long g_lastAgcFmWrite = 0;
 unsigned long g_lastAgcAmWrite = 0;
+unsigned long g_lastRdsEnWrite  = 0;
+unsigned long g_lastBtEnWrite   = 0;
+unsigned long g_lastWifiEnWrite = 0;
 unsigned long g_lastFreqWrite[MAX_BANDS_PERSISTED] = {0};
 
 bool ensureOpen() {
@@ -133,6 +145,27 @@ void commitAgcAm() {
     g_lastAgcAmWrite = millis();
 }
 
+void commitRdsEn() {
+    if (!g_rdsEnDirty || !ensureOpen()) return;
+    g_prefs.putUChar("rds_en", g_rdsEn);
+    g_rdsEnDirty     = false;
+    g_lastRdsEnWrite = millis();
+}
+
+void commitBtEn() {
+    if (!g_btEnDirty || !ensureOpen()) return;
+    g_prefs.putUChar("bt_en", g_btEn);
+    g_btEnDirty     = false;
+    g_lastBtEnWrite = millis();
+}
+
+void commitWifiEn() {
+    if (!g_wifiEnDirty || !ensureOpen()) return;
+    g_prefs.putUChar("wifi_en", g_wifiEn);
+    g_wifiEnDirty     = false;
+    g_lastWifiEnWrite = millis();
+}
+
 void commitFrequency(uint8_t idx) {
     if (idx >= MAX_BANDS_PERSISTED) return;
     if (!g_freqDirty[idx] || !ensureOpen()) return;
@@ -153,6 +186,9 @@ void maybeFlushExpired() {
     if (g_bwAmDirty  && (now - g_lastBwAmWrite  >= PERSIST_MIN_WRITE_MS)) commitBwAm();
     if (g_agcFmDirty && (now - g_lastAgcFmWrite >= PERSIST_MIN_WRITE_MS)) commitAgcFm();
     if (g_agcAmDirty && (now - g_lastAgcAmWrite >= PERSIST_MIN_WRITE_MS)) commitAgcAm();
+    if (g_rdsEnDirty  && (now - g_lastRdsEnWrite  >= PERSIST_MIN_WRITE_MS)) commitRdsEn();
+    if (g_btEnDirty   && (now - g_lastBtEnWrite   >= PERSIST_MIN_WRITE_MS)) commitBtEn();
+    if (g_wifiEnDirty && (now - g_lastWifiEnWrite >= PERSIST_MIN_WRITE_MS)) commitWifiEn();
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         if (g_freqDirty[i] && (now - g_lastFreqWrite[i] >= PERSIST_MIN_WRITE_MS)) {
             commitFrequency(i);
@@ -175,23 +211,38 @@ void persistInit() {
         // the namespace as already-current.
         Serial.println(F("[persist] first boot; initialising namespace"));
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 1 && PERSIST_SCHEMA_VER == 3) {
-        // v1 -> v3 additive: seed theme (from the old v1->v2 path) plus the
-        // four new BW/AGC keys. Band / vol / freq survive as-is.
-        Serial.println(F("[persist] upgrading schema v1 -> v3"));
-        g_prefs.putUChar("theme",  0);
-        g_prefs.putUChar("bw_fm",  0);
-        g_prefs.putUChar("bw_am",  4);
-        g_prefs.putUChar("agc_fm", 0);
-        g_prefs.putUChar("agc_am", 0);
+    } else if (ver == 1 && PERSIST_SCHEMA_VER == 4) {
+        // v1 -> v4 additive: seed theme plus all v3 BW/AGC keys plus the
+        // v4 feature-enable flags. Band / vol / freq survive as-is.
+        Serial.println(F("[persist] upgrading schema v1 -> v4"));
+        g_prefs.putUChar("theme",   0);
+        g_prefs.putUChar("bw_fm",   0);
+        g_prefs.putUChar("bw_am",   4);
+        g_prefs.putUChar("agc_fm",  0);
+        g_prefs.putUChar("agc_am",  0);
+        g_prefs.putUChar("rds_en",  1);
+        g_prefs.putUChar("bt_en",   0);
+        g_prefs.putUChar("wifi_en", 0);
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
-    } else if (ver == 2 && PERSIST_SCHEMA_VER == 3) {
-        // v2 -> v3 adds the BW/AGC per-mode indices. Everything else stays.
-        Serial.println(F("[persist] upgrading schema v2 -> v3"));
-        g_prefs.putUChar("bw_fm",  0);
-        g_prefs.putUChar("bw_am",  4);
-        g_prefs.putUChar("agc_fm", 0);
-        g_prefs.putUChar("agc_am", 0);
+    } else if (ver == 2 && PERSIST_SCHEMA_VER == 4) {
+        // v2 -> v4 adds the BW/AGC per-mode indices and the v4 flags.
+        Serial.println(F("[persist] upgrading schema v2 -> v4"));
+        g_prefs.putUChar("bw_fm",   0);
+        g_prefs.putUChar("bw_am",   4);
+        g_prefs.putUChar("agc_fm",  0);
+        g_prefs.putUChar("agc_am",  0);
+        g_prefs.putUChar("rds_en",  1);
+        g_prefs.putUChar("bt_en",   0);
+        g_prefs.putUChar("wifi_en", 0);
+        g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
+    } else if (ver == 3 && PERSIST_SCHEMA_VER == 4) {
+        // v3 -> v4 adds only the feature-enable flags. Defaults match the
+        // prior firmware behaviour (RDS on, BT/WiFi off) so upgraded units
+        // see no user-visible change until they open the Settings menu.
+        Serial.println(F("[persist] upgrading schema v3 -> v4"));
+        g_prefs.putUChar("rds_en",  1);
+        g_prefs.putUChar("bt_en",   0);
+        g_prefs.putUChar("wifi_en", 0);
         g_prefs.putUShort("ver", PERSIST_SCHEMA_VER);
     } else if (ver != PERSIST_SCHEMA_VER) {
         Serial.print(F("[persist] schema mismatch (stored="));
@@ -221,6 +272,12 @@ void persistInit() {
     g_agcFm = g_prefs.getUChar("agc_fm", 0);
     g_agcAm = g_prefs.getUChar("agc_am", 0);
 
+    // v4 feature flags. Defaults match the migration-path seeds so a
+    // partially-initialised namespace still lands on sane values.
+    g_rdsEn  = g_prefs.getUChar("rds_en",  1);
+    g_btEn   = g_prefs.getUChar("bt_en",   0);
+    g_wifiEn = g_prefs.getUChar("wifi_en", 0);
+
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         char key[8];
         snprintf(key, sizeof(key), "freq%u", (unsigned)i);
@@ -236,6 +293,9 @@ void persistFlush() {
     if (g_bwAmDirty)  commitBwAm();
     if (g_agcFmDirty) commitAgcFm();
     if (g_agcAmDirty) commitAgcAm();
+    if (g_rdsEnDirty)  commitRdsEn();
+    if (g_btEnDirty)   commitBtEn();
+    if (g_wifiEnDirty) commitWifiEn();
     for (uint8_t i = 0; i < MAX_BANDS_PERSISTED; i++) {
         if (g_freqDirty[i]) commitFrequency(i);
     }
@@ -329,5 +389,41 @@ void persistSaveAgcAm(uint8_t idx) {
     g_agcAm      = idx;
     g_agcAmDirty = true;
     commitAgcAm();
+    maybeFlushExpired();
+}
+
+// Feature-enable flags. Menu toggles are low-frequency (one click per change)
+// so commit immediately — matches the theme/band pattern above.
+
+uint8_t persistLoadRdsEnabled() { return g_rdsEn; }
+
+void persistSaveRdsEnabled(uint8_t en) {
+    uint8_t v = en ? 1 : 0;
+    if (v == g_rdsEn) return;
+    g_rdsEn      = v;
+    g_rdsEnDirty = true;
+    commitRdsEn();
+    maybeFlushExpired();
+}
+
+uint8_t persistLoadBtEnabled() { return g_btEn; }
+
+void persistSaveBtEnabled(uint8_t en) {
+    uint8_t v = en ? 1 : 0;
+    if (v == g_btEn) return;
+    g_btEn      = v;
+    g_btEnDirty = true;
+    commitBtEn();
+    maybeFlushExpired();
+}
+
+uint8_t persistLoadWifiEnabled() { return g_wifiEn; }
+
+void persistSaveWifiEnabled(uint8_t en) {
+    uint8_t v = en ? 1 : 0;
+    if (v == g_wifiEn) return;
+    g_wifiEn      = v;
+    g_wifiEnDirty = true;
+    commitWifiEn();
     maybeFlushExpired();
 }

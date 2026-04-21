@@ -39,6 +39,7 @@ enum MenuCmd : uint16_t {
     CMD_BANDWIDTH = 0x1300,   // pick Si4732 IF filter for current mode
     CMD_THEME     = 0x2600,   // pick a palette from Themes.h catalogue
     CMD_SCAN      = 0x1B00,   // start a bandscope sweep around current freq
+    CMD_SETTINGS  = 0x2E00,   // enter the feature-toggle submenu
     CMD_CLOSE     = 0xFF00,   // dismiss the menu, return to main UI
 };
 

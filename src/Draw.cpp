@@ -29,6 +29,7 @@
 #include "Themes.h"
 #include "Battery.h"
 #include "Scan.h"
+#include "connectivity.h"
 
 // Shared TFT handle — registered by main.cpp via drawInit(). Every widget
 // function writes through this reference, mirroring ATS-Mini's `spr` usage
@@ -451,6 +452,95 @@ void drawScanGraphs(uint32_t freq) {
     // Centre-frequency pointer (sits above the grid so it always reads).
     s.fillTriangle(156, 125, 160, 130, 164, 125, TH.scale_pointer);
     s.drawLine(160, 130, 160, 169, TH.scale_pointer);
+}
+
+// ---------------------------------------------------------------------------
+// Bluetooth indicator — 5-line glyph forming the classic BT "rune".
+//
+// Port of ATS-Mini's drawBleIndicator (Draw.cpp) substituting our direct-to-
+// TFT reference for their sprite. The status getter lives in connectivity.cpp;
+// return 0 skips drawing entirely (hidden state) so the user sees no clutter
+// when Bluetooth is disabled in Settings.
+// ---------------------------------------------------------------------------
+void drawBleIndicator(int x, int y) {
+    if (!g_tft) return;
+    int8_t status = getBleStatus();
+    if (!status) return;
+    TFT_eSPI &s = *g_tft;
+
+    uint16_t color = (status > 1) ? TH.rf_icon_conn : TH.rf_icon;
+    s.drawLine(x + 3, y + 1, x + 3, y + 13, color);
+    s.drawLine(x + 3, y + 1, x + 6, y + 4,  color);
+    s.drawLine(x + 6, y + 4, x,     y + 10, color);
+    s.drawLine(x,     y + 4, x + 6, y + 10, color);
+    s.drawLine(x + 6, y + 10, x + 3, y + 13, color);
+}
+
+// ---------------------------------------------------------------------------
+// WiFi indicator — 3 concentric arcs opening to the right, matching the
+// familiar "signal fan" glyph. Port of ATS-Mini's drawWiFiIndicator.
+// ---------------------------------------------------------------------------
+void drawWiFiIndicator(int x, int y) {
+    if (!g_tft) return;
+    int8_t status = getWiFiStatus();
+    if (!status) return;
+    TFT_eSPI &s = *g_tft;
+
+    uint16_t color = (status > 1) ? TH.rf_icon_conn : TH.rf_icon;
+    s.drawSmoothArc(x, 15 + y, 14, 13, 150, 210, color, TH.bg);
+    s.drawSmoothArc(x, 15 + y,  9,  8, 150, 210, color, TH.bg);
+    s.drawSmoothArc(x, 15 + y,  4,  3, 150, 210, color, TH.bg);
+}
+
+// ---------------------------------------------------------------------------
+// RDS indicator — pictographic "interlocking stereo swirls" glyph.
+//
+// Reproduces the RDS logo from the user-supplied SVG: two concentric
+// rings with a centre dot, side by side, slightly overlapping (the
+// classic stereo-headphones silhouette). Drawn procedurally with
+// drawSmoothCircle + fillCircle so it stays anti-aliased and recolours
+// for free across themes — no PROGMEM bitmap needed at this size.
+//
+// Visible only when the user has RDS enabled in Settings. Colour tracks
+// radioIsRdsSyncing(): dim TH.rf_icon while waiting for sync, bright
+// TH.rf_icon_conn once the chip reports a locked RDS stream.
+// ---------------------------------------------------------------------------
+void drawRdsIndicator(int x, int y) {
+    if (!g_tft) return;
+    TFT_eSPI &s = *g_tft;
+
+    // 24×16 footprint fits inside the top icon row (y=1..16 on a 28-px
+    // header), aligned with BT / WiFi / battery glyphs horizontally.
+    constexpr int BOX_W = 24;
+    constexpr int BOX_H = 16;
+
+    // Per-widget clear so a disable transition wipes the pictogram cleanly.
+    s.fillRect(x, y, BOX_W, BOX_H, TH.bg);
+
+    if (!radioGetRdsEnabled()) return;
+
+    uint16_t color = radioIsRdsSyncing() ? TH.rf_icon_conn : TH.rf_icon;
+
+    // Centres of the two swirls — 9 px apart gives a ~3-px horizontal
+    // overlap between the outer rings (r=6), matching the "interlocking"
+    // aesthetic of the reference SVG.
+    const int cxL = x +  7;
+    const int cxR = x + 16;
+    const int cy  = y +  8;
+
+    // Outer rings (r=6) — form the overall silhouette.
+    s.drawSmoothCircle(cxL, cy, 6, color, TH.bg);
+    s.drawSmoothCircle(cxR, cy, 6, color, TH.bg);
+
+    // Centre dots (r=2, solid) — the "eyes" of the stereo swirls. Sized
+    // to roughly 30 % of the outer-ring radius, matching the SVG source
+    // proportions (dot r=4.4 vs outer r=15 in 192-unit viewbox). The
+    // intermediate inner ring from the SVG is dropped at this size —
+    // at r=3 it sits only 1 px away from the r=2 dot and visually
+    // blurs into a solid disc, so the silhouette stays cleaner as a
+    // ring + centre dot.
+    s.fillCircle(cxL, cy, 2, color);
+    s.fillCircle(cxR, cy, 2, color);
 }
 
 void drawSideBar(int x, int y, int sx, bool volFocus) {

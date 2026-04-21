@@ -55,10 +55,29 @@ void drawInit(TFT_eSPI &tft);
 // voltage string gets clipped. Pull the whole widget 4 px inward.
 #define BATT_OFFSET_X       284
 #define BATT_OFFSET_Y         0
-#define WIFI_OFFSET_X       237
+// Header icon slots. Upstream ATS-Mini uses BLE=104, WiFi=237 on their
+// 320×170 panel where there's no left-edge S-meter competing for the
+// same pixels. We draw the ATS-Mini S-meter across y=0..16 from x=0 to
+// x≈211 (15 px speaker + up to 17×4 bars = x=83, cleared out to 211 so
+// transient artefacts are wiped); icons land in the free slots either
+// past the S-meter (x≥86) or to its right (x≥211) and are painted AFTER
+// the S-meter in Layout-Default so the S-meter's fillRect doesn't erase
+// them. See drawLayoutDefault() for the paint order.
+//
+// Right-cluster grouping: BLE + WiFi sit next to each other, just past
+// the "(FM)" mode box (which ends ≈x=200) and with a comfortable gap to
+// the "4.15V" voltage text (which starts ≈x=251).
+#define WIFI_OFFSET_X       230
 #define WIFI_OFFSET_Y         0
-#define BLE_OFFSET_X        104
+#define BLE_OFFSET_X        205
 #define BLE_OFFSET_Y          0
+// RDS header badge — "RDS" text inside a rounded-rect border, styled
+// after the ESP32-TEF6686 / Alpine-head-unit convention. Sits in the
+// top icon row (y=1..16), visually grouped with the S-meter bars /
+// BT / WiFi / battery glyphs. Distinct from RDS_OFFSET_X (165) above
+// which anchors the PS name inside the RDS zone at y≈140.
+#define RDS_ICON_X           76
+#define RDS_ICON_Y            0
 
 // --- Battery (stub until real hardware lands) ------------------------------
 // Returns true on battery / false on USB (i.e. "no voltage to display"). The
@@ -74,6 +93,16 @@ void drawSMeter(int strength, int x, int y);
 void drawStereoIndicator(int x, int y, bool stereo);
 void drawRadioText(int y, int ymax);
 void drawScale(uint32_t freq);
+
+// --- Header status indicators ---------------------------------------------
+// Each widget no-ops when its feature is off (hidden state), draws in
+// TH.rf_icon when enabled-but-not-connected, and in TH.rf_icon_conn when
+// a peer / AP is connected (RDS: in sync). BT/WiFi connected-state is
+// unreachable today — connectivity.cpp's status getters return 0 or 1
+// until a future PR brings up the real radio stacks.
+void drawBleIndicator(int x, int y);
+void drawWiFiIndicator(int x, int y);
+void drawRdsIndicator(int x, int y);
 // volFocus=true → bolden the "Vol:" row to signal that encoder rotation
 // will change volume (not frequency). Set false in FREQUENCY mode.
 void drawSideBar(int x, int y, int sx, bool volFocus);

@@ -96,19 +96,42 @@ static int strengthFromRssi(uint8_t rssi) {
 }
 
 void drawLayoutDefault() {
-    // drawSaveIndicator / drawBleIndicator — no BLE save path in this build.
+    // drawSaveIndicator — not ported (no Save slot in our menu yet).
 
     // Battery widget (stub — always "on battery" with placeholder voltage).
+    // Clears x=232..316 in the header, so it must run BEFORE any overlay
+    // that occupies that range. WiFi at x=220 finishes at x≈234 → placed
+    // after battery so it paints on top of battery's cleared zone.
     drawBattery(BATT_OFFSET_X, BATT_OFFSET_Y);
 
-    // drawWiFiIndicator — no WiFi in this build.
+    const Band *band = radioGetCurrentBand();
+
+    // S-meter (top edge) + stereo pilot split. drawSMeter clears the
+    // whole x=0..211, y=0..16 band to TH.bg, so we must run it BEFORE
+    // the three header indicators (RDS/BLE land inside that strip).
+    // Anything drawn before S-meter in this strip is wiped — that's
+    // why the indicators used to disappear.
+    int strength = strengthFromRssi(radioGetRssi());
+    drawSMeter(strength, METER_OFFSET_X, METER_OFFSET_Y);
+    drawStereoIndicator(METER_OFFSET_X, METER_OFFSET_Y,
+                        (band->mode == MODE_FM) && radioIsStereo());
+
+    // Header status icons. Each no-ops when its feature is off — the
+    // enable flags come from connectivity.cpp (BT/WiFi) and radio.cpp (RDS)
+    // and are driven by the Settings submenu. BT/WiFi return status 0/1
+    // today since the real stacks aren't wired up; `connected` colour
+    // activates once a future PR reports an actual peer/AP. Placed AFTER
+    // the S-meter so they paint on top of its cleared strip in the free
+    // area past the maximum bar extent.
+    drawBleIndicator(BLE_OFFSET_X, BLE_OFFSET_Y);
+    drawWiFiIndicator(WIFI_OFFSET_X, WIFI_OFFSET_Y);
+    drawRdsIndicator(RDS_ICON_X, RDS_ICON_Y);
 
     // Band + modulation box. drawBandAndMode selects Orbitron_Light_24
     // internally, so Layout-Default does not need its own TFT handle.
     // radioGetCurrentBand()->name is the long form ("FM Broadcast"); the
     // mode box sits immediately to the right of the band tag so we
     // shorten it before drawing.
-    const Band *band = radioGetCurrentBand();
     char shortName[8];
     shortBandName(band->name, shortName, sizeof(shortName));
     drawBandAndMode(shortName, modeText(band->mode), BAND_OFFSET_X, BAND_OFFSET_Y);
@@ -127,17 +150,9 @@ void drawLayoutDefault() {
     drawStationName(ps, RDS_OFFSET_X, RDS_OFFSET_Y);
 
     // Left sidebar — info box with Step/BW/AGC/Vol/PI/Time rows.
-    // Upstream's x/y offsets land a 86×110 box at (0, 18). Rendered
-    // before the S-meter overlays so the meter's icon column stays on
-    // top of the box's rounded corner.
+    // Upstream's x/y offsets land a 86×110 box at (0, 18).
     drawSideBar(MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X,
                 getAdjustMode() == MODE_VOLUME);
-
-    // S-meter (top edge) + stereo pilot split.
-    int strength = strengthFromRssi(radioGetRssi());
-    drawSMeter(strength, METER_OFFSET_X, METER_OFFSET_Y);
-    drawStereoIndicator(METER_OFFSET_X, METER_OFFSET_Y,
-                        (band->mode == MODE_FM) && radioIsStereo());
 
     // Bottom area (y >= 120): priority order matches upstream —
     //   1. Scan graph while a sweep is active or its data is held.

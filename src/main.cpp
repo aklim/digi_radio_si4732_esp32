@@ -40,6 +40,7 @@
 #include "Themes.h"
 #include "Draw.h"
 #include "Scan.h"
+#include "connectivity.h"
 
 #include "version.h"
 
@@ -233,6 +234,15 @@ void setup() {
     // user selections. If radioSetBand() fires below with a non-zero saved
     // band, that path re-applies too and this call is redundant-but-cheap.
     radioApplyCurrentBand();
+
+    // Restore persisted feature-enable flags. radioSetRdsEnabled takes the
+    // radio mutex internally, so it must run after radioInit(). The BT/WiFi
+    // setters only flip a flag today (no stack), so ordering there is only
+    // "before drawLayoutDefault runs". Doing all three here keeps the wiring
+    // visible in one block.
+    radioSetRdsEnabled(persistLoadRdsEnabled() != 0);
+    connectivitySetBtEnabled(persistLoadBtEnabled() != 0);
+    connectivitySetWifiEnabled(persistLoadWifiEnabled() != 0);
 
     // Apply saved band + volume now that the mutex is in place.
     uint8_t savedBand = persistLoadBand();

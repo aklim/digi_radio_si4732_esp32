@@ -44,6 +44,7 @@
 #include "ui_layout.h"
 #include "Themes.h"
 #include "Scan.h"
+#include "connectivity.h"
 
 namespace {
 
@@ -54,6 +55,7 @@ enum MenuState : uint8_t {
     MENU_STATE_BW,
     MENU_STATE_AGC,
     MENU_STATE_THEME,
+    MENU_STATE_SETTINGS,
 };
 
 MenuState g_state   = MENU_STATE_CLOSED;
@@ -65,12 +67,13 @@ bool      g_dirty   = false;
 // = back out" muscle memory is consistent.
 struct TopItem { const char* label; MenuCmd cmd; };
 constexpr TopItem TOP_ITEMS[] = {
-    { "Band",  CMD_BAND      },
-    { "BW",    CMD_BANDWIDTH },
-    { "AGC",   CMD_AGC       },
-    { "Theme", CMD_THEME     },
-    { "Scan",  CMD_SCAN      },
-    { "Close", CMD_CLOSE     },
+    { "Band",     CMD_BAND      },
+    { "BW",       CMD_BANDWIDTH },
+    { "AGC",      CMD_AGC       },
+    { "Theme",    CMD_THEME     },
+    { "Scan",     CMD_SCAN      },
+    { "Settings", CMD_SETTINGS  },
+    { "Close",    CMD_CLOSE     },
 };
 constexpr int TOP_COUNT = sizeof(TOP_ITEMS) / sizeof(TOP_ITEMS[0]);
 
@@ -98,6 +101,16 @@ bool agcItemIsBack(int idx)  { return idx >= (int)radioGetAgcAttMax() + 1; }
 int  themeItemCount()         { return getTotalThemes() + 1; }
 bool themeItemIsBack(int idx) { return idx >= getTotalThemes(); }
 
+// --- Settings submenu items ------------------------------------------------
+// Boolean feature toggles — RDS / Bluetooth / WiFi. Order here drives the
+// indices used by menuHandleClick below; keep the "Back" row last.
+constexpr int SETTINGS_IDX_RDS  = 0;
+constexpr int SETTINGS_IDX_BT   = 1;
+constexpr int SETTINGS_IDX_WIFI = 2;
+constexpr int SETTINGS_COUNT    = 4;     // 3 toggles + Back
+
+bool settingsItemIsBack(int idx) { return idx >= SETTINGS_COUNT - 1; }
+
 // --- Layout constants (kept local since ui_layout.h is zone-focused) ---
 constexpr int MENU_ROW_H      = 30;
 constexpr int MENU_ROW_PAD_X  = 12;
@@ -110,12 +123,13 @@ constexpr int MENU_HINT_Y     = SCREEN_H - 18;
 
 int currentItemCount() {
     switch (g_state) {
-        case MENU_STATE_TOP:   return TOP_COUNT;
-        case MENU_STATE_BAND:  return bandItemCount();
-        case MENU_STATE_BW:    return bwItemCount();
-        case MENU_STATE_AGC:   return agcItemCount();
-        case MENU_STATE_THEME: return themeItemCount();
-        default:               return 0;
+        case MENU_STATE_TOP:      return TOP_COUNT;
+        case MENU_STATE_BAND:     return bandItemCount();
+        case MENU_STATE_BW:       return bwItemCount();
+        case MENU_STATE_AGC:      return agcItemCount();
+        case MENU_STATE_THEME:    return themeItemCount();
+        case MENU_STATE_SETTINGS: return SETTINGS_COUNT;
+        default:                  return 0;
     }
 }
 
@@ -258,6 +272,27 @@ void labelAgc(int idx, char *buf, size_t n) {
 void labelTheme(int idx, char *buf, size_t n) {
     snprintf(buf, n, "%s", theme[idx].name);
 }
+void labelSettings(int idx, char *buf, size_t n) {
+    // Row labels show the live state so the user can read off the
+    // current value at a glance. Click toggles and the row repaints
+    // because menuHandleClick sets g_dirty before returning.
+    switch (idx) {
+        case SETTINGS_IDX_RDS:
+            snprintf(buf, n, "RDS: %s", radioGetRdsEnabled() ? "On" : "Off");
+            break;
+        case SETTINGS_IDX_BT:
+            snprintf(buf, n, "Bluetooth: %s",
+                     connectivityGetBtEnabled() ? "On" : "Off");
+            break;
+        case SETTINGS_IDX_WIFI:
+            snprintf(buf, n, "WiFi: %s",
+                     connectivityGetWifiEnabled() ? "On" : "Off");
+            break;
+        default:
+            if (n) buf[0] = 0;
+            break;
+    }
+}
 
 // --- Per-state drawers (all delegate to drawList) -------------------------
 
@@ -280,6 +315,10 @@ void drawAgcMenu(TFT_eSPI& tft) {
 void drawThemeMenu(TFT_eSPI& tft) {
     drawList(tft, "Theme", themeItemCount(), (int)themeIdx,
              labelTheme, themeItemIsBack, "* = active theme");
+}
+void drawSettingsMenu(TFT_eSPI& tft) {
+    drawList(tft, "Settings", SETTINGS_COUNT, -1,
+             labelSettings, settingsItemIsBack, "Click = toggle");
 }
 
 }  // namespace
@@ -343,6 +382,9 @@ void menuHandleClick() {
                 menuClose();
                 return;
             }
+            case CMD_SETTINGS:
+                transitionTo(MENU_STATE_SETTINGS);
+                return;
             case CMD_CLOSE:
                 menuClose();
                 return;
@@ -409,6 +451,41 @@ void menuHandleClick() {
         menuClose();
         return;
     }
+
+    if (g_state == MENU_STATE_SETTINGS) {
+        if (settingsItemIsBack(g_cursor)) {
+            transitionTo(MENU_STATE_TOP);
+            return;
+        }
+        // Toggle the matching flag, persist it, and stay inside the
+        // Settings submenu so the user can flip several toggles in one
+        // visit. g_dirty forces a repaint so the "On"/"Off" text flips
+        // immediately.
+        switch (g_cursor) {
+            case SETTINGS_IDX_RDS: {
+                bool en = !radioGetRdsEnabled();
+                radioSetRdsEnabled(en);
+                persistSaveRdsEnabled(en ? 1 : 0);
+                break;
+            }
+            case SETTINGS_IDX_BT: {
+                bool en = !connectivityGetBtEnabled();
+                connectivitySetBtEnabled(en);
+                persistSaveBtEnabled(en ? 1 : 0);
+                break;
+            }
+            case SETTINGS_IDX_WIFI: {
+                bool en = !connectivityGetWifiEnabled();
+                connectivitySetWifiEnabled(en);
+                persistSaveWifiEnabled(en ? 1 : 0);
+                break;
+            }
+            default:
+                break;
+        }
+        g_dirty = true;
+        return;
+    }
 }
 
 bool menuTakeDirty() {
@@ -424,11 +501,12 @@ void menuDraw(TFT_eSPI& tft) {
     tft.fillScreen(COL_BG);
 
     switch (g_state) {
-        case MENU_STATE_TOP:   drawTopMenu(tft);   break;
-        case MENU_STATE_BAND:  drawBandMenu(tft);  break;
-        case MENU_STATE_BW:    drawBwMenu(tft);    break;
-        case MENU_STATE_AGC:   drawAgcMenu(tft);   break;
-        case MENU_STATE_THEME: drawThemeMenu(tft); break;
+        case MENU_STATE_TOP:      drawTopMenu(tft);      break;
+        case MENU_STATE_BAND:     drawBandMenu(tft);     break;
+        case MENU_STATE_BW:       drawBwMenu(tft);       break;
+        case MENU_STATE_AGC:      drawAgcMenu(tft);      break;
+        case MENU_STATE_THEME:    drawThemeMenu(tft);    break;
+        case MENU_STATE_SETTINGS: drawSettingsMenu(tft); break;
         default: break;
     }
 }

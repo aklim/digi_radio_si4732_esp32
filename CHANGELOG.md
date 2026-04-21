@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Header status icons.** Three compact indicators now render in the top
+  header zone — an "RDS" text badge on the left edge, the Bluetooth rune
+  (ATS-Mini 5-line glyph), and the WiFi fan (3 concentric arcs). Each is
+  hidden when its feature is off, drawn dim (`TH.rf_icon`) when enabled,
+  and drawn bright (`TH.rf_icon_conn`) on a live connection — for RDS
+  that means "chip reports sync"; for BT/WiFi the "connected" state is
+  reserved for a future PR that wires up the real radio stacks.
+- **Settings submenu.** Long-press → **Settings** opens a new submenu
+  with on/off toggles for RDS, Bluetooth, and WiFi. Unlike the Band /
+  BW / AGC pickers, Settings stays open after a click so multiple
+  toggles can be flipped in one visit; `< Back` returns to the top.
+- **Persist schema v4.** Three new `u8` keys — `rds_en` (default 1),
+  `bt_en` (default 0), `wifi_en` (default 0). Upgraders from v1 / v2 /
+  v3 keep their existing state; wipe path seeds defaults.
+
+### Changed
+
+- **RDS decode is now gateable.** When the user turns RDS off in
+  Settings the Core-0 task's RDS poll short-circuits before any I²C
+  traffic, `setRdsConfig(0, …)` disables the chip's decoder, and the
+  PS / RT / PI mirrors are cleared so the RDS zone falls back to the
+  band scale. Re-enabling resumes normal operation within the next
+  poll tick. Default remains "RDS on", matching prior firmware.
+
 ## [2.2.2] - 2026-04-19
 
 ### Added
