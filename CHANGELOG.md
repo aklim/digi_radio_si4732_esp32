@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **Transport-style touch-button row.** Five fingertip-sized buttons
+  (58×50 px each, 5 px gaps) at `y=180..230` below the band scale:
+  `⏪  ◀  🔊  ▶  ⏩` — Seek Down / Prev Preset / Mute / Next Preset
+  / Seek Up. All icons drawn procedurally in
+  [src/Draw.cpp](src/Draw.cpp) (no bitmap fonts), so the label-vs-arrow
+  overlap from the prototype goes away and the row reads from across
+  the bench.
+- **Auto-seek.** Outer double-arrow buttons step the current band at
+  `band->step` until a frequency meets per-mode RSSI + SNR thresholds
+  (`RSSI≥15 / SNR≥8` on FM, `RSSI≥25 / SNR≥8` on AM/SW) or wrap the
+  full band with no hit (origin restored). Includes a peak-climb so
+  adjacent-channel RSSI bleed doesn't land us 100 kHz off the true
+  carrier — once a step clears the threshold, the engine keeps probing
+  up to 3 further steps while RSSI keeps rising and lands on the local
+  maximum. Implemented as a tick-driven state machine in
+  [src/Seek.cpp](src/Seek.cpp) on top of the existing
+  `radioScanEnter / radioScanMeasure / radioScanExit` primitives, so
+  the Core-0 poll loop is paused for the duration and audio is muted
+  through each step. Any encoder or touch input aborts.
+- **Preset navigation.** Inner single-arrow buttons jump through
+  memory-preset slots saved for the current band, in order of frequency
+  (not slot index). Wraps at the ends — pressing Next at the highest
+  preset cycles back to the lowest. New
+  `persistFindPresetFreq(band, currentFreq, dir)` helper in
+  [src/persist.cpp](src/persist.cpp) iterates the 16-slot table once
+  and returns 0 when no presets exist for the current band (the tap
+  becomes a silent no-op).
+- **Mute toggle.** Centre speaker-icon button flips a new user-latched
+  mute in [src/radio.cpp](src/radio.cpp) (`radioSetMute` /
+  `radioGetMute`). The latch survives band switches (re-asserted in
+  `applyBandLocked`) and bandscope scans (`radioScanExit` restores it
+  instead of unconditionally un-muting). Not persisted on purpose —
+  mute on reboot would be user-hostile. Muted state shows an inverted
+  button fill *and* a slash overlay across the speaker glyph for
+  at-a-glance legibility.
+- **Touch transform fix.** The original rotation-0 calibration was
+  being applied in rotation-3 runtime, which stretched X and compressed
+  Y, making taps below `y≈170` fall outside every hit rect. Replaced
+  the broken `ty = PANEL_W_NATIVE - 1 - rawX` transform with a proper
+  rotation-0-cal → rotation-3-runtime remap (`landscape_x = 319 - 4·rawY/3`,
+  `landscape_y = 3·rawX/4`) in
+  [src/main.cpp](src/main.cpp) `handleTouch()`. The existing FREQ-zone
+  tap that "worked" before was passing by coincidence; now every tap
+  lands on its true screen position.
+- **New `btn_*` theme fields.** Three fields (`btn_bg` / `btn_fg` /
+  `btn_active`) added to `ColorTheme` in
+  [include/Themes.h](include/Themes.h) and seeded for every one of the
+  9 bundled palettes so the button row is legible in each.
+- **`test_native_seek` Unity suite.** 10 host-side tests for the
+  seek-step wrap arithmetic (`seekNextFreq` in
+  [include/seek_step.h](include/seek_step.h)) — up/down/at-edge/wrap
+  for both FM and AM/MW step granularities. Runs under the existing
+  `pio test -e native` (~1 s) and the same CI gate in
+  [.github/workflows/ci.yml](.github/workflows/ci.yml).
+
 ## [2.6.0] - 2026-04-21
 
 ### Added

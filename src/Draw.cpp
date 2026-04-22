@@ -572,3 +572,127 @@ void drawRadioText(int y, int ymax) {
     }
     s.setTextDatum(TL_DATUM);
 }
+
+// ---------------------------------------------------------------------------
+// Bottom touch-button row — transport-style 5-button layout.
+//
+//   ⏪   ◀   🔊   ▶   ⏩
+//  seek prev mute next seek
+//  down          preset up
+//
+// Outer double-arrows drive auto-seek (Seek.cpp); inner single-arrows
+// navigate through saved memory presets for the current band; centre
+// speaker icon toggles the user mute latch. All icons are drawn
+// procedurally from TFT_eSPI primitives (no bitmap font / no glyph set
+// dependency). Each button is 58×50 with 5 px gaps on each side and
+// between; the 58-px width falls out of 5 × 58 + 6 × 5 = 320 exactly.
+// ---------------------------------------------------------------------------
+
+// Fill + frame primitive. Returns the (fill, fg) pair via out-params so the
+// caller can tint the icon without re-computing theme colour lookups.
+static void drawButtonShell(TFT_eSPI &s, int x, int y, int w, int h,
+                            bool active, uint16_t &outFg) {
+    uint16_t fill = active ? TH.btn_active : TH.btn_bg;
+    outFg         = active ? TH.bg         : TH.btn_fg;
+    s.fillRoundRect(x, y, w, h, 6, fill);
+    s.drawRoundRect(x, y, w, h, 6, TH.btn_fg);
+}
+
+// Single filled triangle centred at (cx, cy). 14×18 — big enough that a
+// preset-nav tap glyph reads as "one step" vs. the double-arrow seek
+// glyph's two stacked triangles of ~10×14 each.
+static void drawSingleArrow(TFT_eSPI &s, int cx, int cy, bool pointLeft,
+                            uint16_t color) {
+    if (pointLeft) {
+        s.fillTriangle(cx - 7, cy,
+                       cx + 7, cy - 9,
+                       cx + 7, cy + 9, color);
+    } else {
+        s.fillTriangle(cx + 7, cy,
+                       cx - 7, cy - 9,
+                       cx - 7, cy + 9, color);
+    }
+}
+
+// Two triangles stacked horizontally, each ~10×14 — the media-transport
+// "rewind" / "fast-forward" glyph. Paired with the single-arrow helper
+// so users read the outer row as "jump further" than the inner row.
+static void drawDoubleArrow(TFT_eSPI &s, int cx, int cy, bool pointLeft,
+                            uint16_t color) {
+    if (pointLeft) {
+        s.fillTriangle(cx - 10, cy, cx,     cy - 8, cx,     cy + 8, color);
+        s.fillTriangle(cx,      cy, cx + 10, cy - 8, cx + 10, cy + 8, color);
+    } else {
+        s.fillTriangle(cx + 10, cy, cx,     cy - 8, cx,     cy + 8, color);
+        s.fillTriangle(cx,      cy, cx - 10, cy - 8, cx - 10, cy + 8, color);
+    }
+}
+
+// Speaker glyph centred at (cx, cy) — filled rectangle "back" + filled
+// trapezoid "cone" + sound-wave bars to the right when unmuted, or a
+// diagonal slash when muted. Proportions keep the icon ≈ 26 px wide so
+// it balances visually against the arrow glyphs in the neighbouring
+// buttons at the same 58 px tile width.
+static void drawSpeakerIcon(TFT_eSPI &s, int cx, int cy, bool muted,
+                            uint16_t color) {
+    // Back (small rectangle, 5 px wide, 8 px tall).
+    s.fillRect(cx - 12, cy - 4, 5, 9, color);
+
+    // Cone — trapezoid drawn as two triangles sharing the (cx-7, cy-4)↔(cx+2, cy+10) diagonal.
+    s.fillTriangle(cx - 7, cy - 4, cx + 2, cy - 10, cx + 2, cy + 10, color);
+    s.fillTriangle(cx - 7, cy - 4, cx - 7, cy + 5,  cx + 2, cy + 10, color);
+
+    if (!muted) {
+        // Three ascending vertical bars standing in for sound waves —
+        // simpler than partial arcs and reads crisply at a glance.
+        s.fillRect(cx + 5,  cy - 3, 2,  7, color);
+        s.fillRect(cx + 9,  cy - 6, 2, 13, color);
+        s.fillRect(cx + 13, cy - 9, 2, 19, color);
+    } else {
+        // Muted — diagonal slash across the speaker area. Two parallel
+        // lines for a bolder stroke that's legible against the inverted
+        // active fill.
+        s.drawLine(cx - 13, cy - 11, cx + 15, cy + 11, color);
+        s.drawLine(cx - 12, cy - 11, cx + 16, cy + 11, color);
+    }
+}
+
+void drawButtonRow(bool seeking, SeekDir seekDir, bool muted) {
+    if (!g_tft) return;
+    TFT_eSPI &s = *g_tft;
+
+    // Clear the whole strip (incl. ~10 px above / below) so any previous
+    // content (scan graph tail, radio-text remnants) is wiped before the
+    // buttons repaint.
+    s.fillRect(0, 170, 320, 70, TH.bg);
+
+    const bool downActive = seeking && seekDir == SEEK_DOWN;
+    const bool upActive   = seeking && seekDir == SEEK_UP;
+    const int  cy         = BTN_ROW_Y + BTN_ROW_H / 2;
+
+    uint16_t fg = 0;
+
+    // Seek Down — double-left.
+    drawButtonShell(s, BTN_SEEK_DOWN_X, BTN_ROW_Y, BTN_W, BTN_ROW_H,
+                    downActive, fg);
+    drawDoubleArrow(s, BTN_SEEK_DOWN_X + BTN_W / 2, cy, true, fg);
+
+    // Prev preset — single-left.
+    drawButtonShell(s, BTN_PREV_X, BTN_ROW_Y, BTN_W, BTN_ROW_H, false, fg);
+    drawSingleArrow(s, BTN_PREV_X + BTN_W / 2, cy, true, fg);
+
+    // Mute — speaker. The active fill is the primary state cue; the
+    // slash-overlay on the glyph is the secondary (legible cue from
+    // across a bench when the accent colour is muted).
+    drawButtonShell(s, BTN_MUTE_X, BTN_ROW_Y, BTN_W, BTN_ROW_H, muted, fg);
+    drawSpeakerIcon(s, BTN_MUTE_X + BTN_W / 2, cy, muted, fg);
+
+    // Next preset — single-right.
+    drawButtonShell(s, BTN_NEXT_X, BTN_ROW_Y, BTN_W, BTN_ROW_H, false, fg);
+    drawSingleArrow(s, BTN_NEXT_X + BTN_W / 2, cy, false, fg);
+
+    // Seek Up — double-right.
+    drawButtonShell(s, BTN_SEEK_UP_X, BTN_ROW_Y, BTN_W, BTN_ROW_H,
+                    upActive, fg);
+    drawDoubleArrow(s, BTN_SEEK_UP_X + BTN_W / 2, cy, false, fg);
+}

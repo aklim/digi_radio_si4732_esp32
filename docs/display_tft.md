@@ -35,11 +35,20 @@ rect-clears on alloc failure).
 
 Landscape only — the former `DISPLAY_FLIPPED` portrait knob retired when
 the layout moved to ATS-Mini geometry. `tft.setRotation(3)` runs in
-`initDisplay()`. Our XPT2046 calibration was captured in rotation 0; the
-`handleTouch()` helper in `main.cpp` rotates the returned coords into the
-rotation-3 frame:
+`initDisplay()`. Our XPT2046 calibration was captured in rotation 0
+(240×320 portrait), but TFT_eSPI's `getTouch()` scales the ADC output
+to the *current* rotation's `_tft_data.width / height` without re-running
+the calibration. The net effect: raw ADC values come back mapped into
+a 320×240 frame whose axes are still aligned to the portrait ADC map,
+so both the swap **and** a 4/3 vs 3/4 stretch are needed before the
+coords match what's drawn on screen. `handleTouch()` in `main.cpp`
+applies:
 
-    (x_disp, y_disp) = (y_raw, PANEL_W_NATIVE - 1 - x_raw)
+    landscape_x = 319 - (4 × rawY) / 3
+    landscape_y = (3 × rawX) / 4
+
+Verified empirically by logging raw + mapped coords and tapping each
+of the five on-screen buttons in the bottom transport row.
 
 ## Build and flash
 
@@ -170,21 +179,49 @@ the header "STEREO / MONO" label.
   [menu.md](menu.md)). Inside the menu, rotation navigates and click
   confirms; another long-press backs out.
 
-### Touch zones (alternative)
+### Touch zones
 
-Tapping the screen forces focus to the tapped zone. Taps outside either zone
-are ignored. Debounce is 200 ms; after a processed tap the loop sleeps 15 ms
-to let the resistive XPT2046 settle — the same pattern as
+Tapping the screen runs two hit-test passes in `handleTouch()` (inside
+`main.cpp`). Debounce is 200 ms; after a processed tap the loop sleeps
+15 ms to let the resistive XPT2046 settle — the same pattern as
 `test_shield.cpp`.
+
+**Mode-toggle zones** (freq / volume strips):
 
 | Tap target      | Rect (x, y, w, h)    | Action                 |
 |-----------------|----------------------|------------------------|
-| Frequency zone  | `(0, 32, 240, 108)`  | `MODE_FREQUENCY`       |
-| Volume zone     | `(0, 256, 240, 48)`  | `MODE_VOLUME`          |
+| Frequency zone  | `(0, 32, 320, 108)`  | `MODE_FREQUENCY`       |
+| Volume zone     | `(0, 256, 320, 48)`  | `MODE_VOLUME` *(off-panel in landscape — effectively dead code)* |
+
+**Bottom transport-row buttons** (`y=180..230`, 58×50 each, 5 px gaps;
+constants live in `include/Draw.h` so drawn geometry and hit rects
+can't drift):
+
+| Icon | Label            | Rect (x, y, w, h)      | Action |
+|------|------------------|------------------------|--------|
+| `⏪` | Seek Down        | `(5,   180, 58, 50)`   | Start auto-seek downward |
+| `◀` | Prev Preset      | `(68,  180, 58, 50)`   | Jump to previous memory preset in current band (by freq) |
+| `🔊` | Mute             | `(131, 180, 58, 50)`   | Toggle `radioSetMute` user-latched mute |
+| `▶` | Next Preset      | `(194, 180, 58, 50)`   | Jump to next memory preset in current band (by freq) |
+| `⏩` | Seek Up          | `(257, 180, 58, 50)`   | Start auto-seek upward |
+
+All icons are drawn procedurally from filled triangles + rectangles in
+`drawButtonRow()` (no bitmap fonts, so the glyphs rescale with the
+theme fill colours). The row is hidden while a bandscope sweep is
+running — the sweep's graph extends down into the button-row's Y range
+and the two modes are mutually exclusive (both go through
+`radioScanEnter / radioScanExit`). See
+[src/Draw.cpp](../src/Draw.cpp) for the icon geometry and
+[src/Seek.cpp](../src/Seek.cpp) for the auto-seek state machine
+(peak-climb included so the engine lands on the carrier rather than
+its adjacent-channel skirt).
 
 Touch calibration `{ 477, 3203, 487, 3356, 6 }` is hard-coded in
 `main.cpp`. If the shield is replaced, re-run the calibration phase
-in `src/test_shield.cpp` and paste the resulting 5 numbers.
+in `src/test_shield.cpp` and paste the resulting 5 numbers. The
+landscape remap (see "Orientation and touch" above) absorbs the
+rotation mismatch so no calibration change is needed when adding new
+hit rects at any Y position.
 
 ## RDS behaviour
 

@@ -130,6 +130,15 @@ static uint8_t g_agcIdxAm = 0;
 // RSSI / RDS values freeze until the scan releases them.
 static volatile bool g_scanActive = false;
 
+// --- User mute latch --------------------------------------------------------
+// Toggled by the on-screen Mute button (radioSetMute). Kept separate from
+// the transient mute the scan hooks apply so scanEnter/Exit can wrap any
+// sweep without stepping on the user's choice: scanExit restores audio to
+// g_userMute, not to unconditional false. applyBandLocked() also re-asserts
+// it so a band switch from inside the menu doesn't silently un-mute.
+// Not persisted on purpose — mute-on-reboot would be user-hostile.
+static bool g_userMute = false;
+
 // --- FreeRTOS primitives ----------------------------------------------------
 // g_mutex is created in radioInit() *before* any other thread can observe
 // the module. radioStart() creates the task after radioInit() returns, so
@@ -207,6 +216,11 @@ static void applyBandLocked() {
     // mode's power-on default on every band switch (FM: Auto, AM: 2 kHz).
     applyBwLocked();
     applyAgcLocked();
+
+    // Re-assert the user's mute choice. setFM/setAM leaves the mute bit
+    // alone on the chip we observe, but a future lib revision might clear
+    // it — cheap one-byte write buys immunity either way.
+    g_radio.setAudioMute(g_userMute);
 }
 
 // Poll signal quality on the task's cadence. Returns true when any cached
@@ -775,11 +789,12 @@ void radioScanEnter() {
 
 void radioScanExit(uint16_t restoreFreq) {
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    // Restore the listener's original tune and un-mute. Cached RSSI /
-    // SNR will refresh on the next regular pollSignalLocked() call.
+    // Restore the listener's original tune. Audio returns to the user's
+    // latched mute state, not unconditional "on" — otherwise pressing
+    // Seek while muted would silently un-mute when the seek completes.
     g_radio.setFrequency(restoreFreq);
     activeBandLocked().currentFreq = restoreFreq;
-    g_radio.setAudioMute(false);
+    g_radio.setAudioMute(g_userMute);
     g_scanActive     = false;
     g_lastSignalPoll = 0;  // force a fresh poll on the next tick
     g_signalChanged  = true;
@@ -799,4 +814,22 @@ void radioScanMeasure(uint16_t freq, uint16_t settleMs,
     outRssi = g_radio.getCurrentRSSI();
     outSnr  = g_radio.getCurrentSNR();
     xSemaphoreGive(g_mutex);
+}
+
+// --- User mute --------------------------------------------------------------
+
+void radioSetMute(bool mute) {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_userMute = mute;
+    // During a scan the chip is already muted; skip the I2C write so we
+    // don't race the sweep. scanExit will re-apply g_userMute on completion.
+    if (!g_scanActive) g_radio.setAudioMute(mute);
+    xSemaphoreGive(g_mutex);
+}
+
+bool radioGetMute() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    bool m = g_userMute;
+    xSemaphoreGive(g_mutex);
+    return m;
 }

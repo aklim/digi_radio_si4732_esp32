@@ -40,6 +40,7 @@
 #include "Themes.h"
 #include "Draw.h"
 #include "Scan.h"
+#include "Seek.h"
 #include "connectivity.h"
 #include "backlight.h"
 
@@ -347,6 +348,14 @@ void loop() {
                 markDirty(DIRTY_ALL);
             }
         }
+    } else if (seekIsActive()) {
+        // Any encoder interaction aborts the seek and restores the pre-seek
+        // tune. Touch aborts too; that's handled in handleTouch so the user
+        // can cancel by tapping any button.
+        if (rotated || btn == BTN_CLICK || btn == BTN_LONG_PRESS) {
+            seekAbort();
+            markDirty(DIRTY_ALL);
+        }
     } else {
         if (rotated) handleEncoderRotation(encValue);
         if (btn == BTN_CLICK)      toggleMode();
@@ -368,6 +377,37 @@ void loop() {
         if (scanIsActive()) {
             scanTick();
             markDirty(DIRTY_ALL);
+        }
+        // Advance an in-flight auto-seek one measurement per loop tick.
+        // Each seekTick() takes ~30-40 ms (retune + settle + quality
+        // read); worst case a dead band traversal is still a couple of
+        // seconds rather than blocking the UI. The tick marks the screen
+        // dirty so the active seek button stays highlighted even when
+        // the freq / RSSI / RDS zones haven't moved. On the falling-edge
+        // of seekIsActive() (landed on a station, or ran the full band
+        // and restored origin) persist the final freq so a power cycle
+        // keeps the tune — same behaviour as the Scan-exit path.
+        {
+            static bool seekWas = false;
+            bool seekNow = seekIsActive();
+            if (seekNow) {
+                seekTick();
+                seekNow = seekIsActive();
+                markDirty(DIRTY_ALL);
+            }
+            if (seekWas && !seekNow) {
+                persistSaveFrequency(radioGetBandIdx(), radioGetFrequency());
+                // Re-anchor the encoder counter to the post-seek freq.
+                // handleEncoderRotation() derives freq from the absolute
+                // encoder counter (counter * band->step), so without this
+                // sync the next knob turn would snap back toward the
+                // pre-seek freq.
+                encoderSetBoundsForMode(currentMode,
+                                        radioGetFrequency(),
+                                        radioGetVolume());
+                markDirty(DIRTY_ALL);
+            }
+            seekWas = seekNow;
         }
         if (radioPollSignal()) {
             markDirty(DIRTY_METER | DIRTY_HEADER);
@@ -476,11 +516,95 @@ static void handleTouch() {
     // 320×240) so transform the returned rotation-0 coords into the
     // display's current logical frame:
     //   (x_disp, y_disp) = (y_raw, PANEL_W_NATIVE - 1 - x_raw)
+    // The touch calibration (TOUCH_CALIBRATION above) was captured at
+    // setRotation(0) — a 240×320 portrait frame — but we run in rotation 3
+    // (320×240 landscape). TFT_eSPI's getTouch() scales the ADC output to
+    // the *current* rotation's _tft_data.width/height without re-running
+    // the calibration, so raw values come back in a landscape-320×240
+    // frame but with axes still aligned to the portrait ADC map. The net
+    // result is that each raw axis needs both a swap AND a scale by the
+    // ratio of portrait/landscape dims (240/320 = 3/4, and 320/240 = 4/3)
+    // before it reads as a screen coordinate. Verified empirically by
+    // logging raw + mapped coords and tapping each of the three on-screen
+    // buttons — see the comment block near the first release of the
+    // bottom button row.
     uint16_t rawX = tx, rawY = ty;
-    tx = rawY;
-    ty = PANEL_W_NATIVE - 1 - rawX;
+    int32_t lx = 319 - (4 * (int32_t)rawY + 1) / 3;
+    int32_t ly = (3 * (int32_t)rawX + 2) / 4;
+    if (lx < 0) lx = 0; else if (lx > SCREEN_W - 1) lx = SCREEN_W - 1;
+    if (ly < 0) ly = 0; else if (ly > SCREEN_H - 1) ly = SCREEN_H - 1;
+    tx = (uint16_t)lx;
+    ty = (uint16_t)ly;
 
     lastTouchMs = now;
+
+    // Seek running: any tap aborts. Mirrors the encoder-abort behaviour in
+    // the input router, so tapping the highlighted button cancels.
+    if (seekIsActive()) {
+        seekAbort();
+        markDirty(DIRTY_ALL);
+        delay(15);
+        return;
+    }
+
+    // Scan owns the chip — don't dispatch button actions that would fight
+    // it for I²C. (Mute is the one exception: it flips a flag only, and
+    // scanExit respects it. But tapping elsewhere should stay inert.)
+    if (scanIsActive()) {
+        delay(15);
+        return;
+    }
+
+    // Bottom touch-button row — Seek Down / Prev Preset / Mute / Next
+    // Preset / Seek Up. Hit rects come from Draw.h so they track the drawn
+    // geometry automatically. Preset-nav helper lives in persist.cpp so
+    // the touch layer only knows "find a freq, tune, save".
+    if (ty >= BTN_ROW_Y && ty < BTN_ROW_Y + BTN_ROW_H) {
+        if (tx >= BTN_SEEK_DOWN_X && tx < BTN_SEEK_DOWN_X + BTN_W) {
+            seekStart(SEEK_DOWN);
+            markDirty(DIRTY_ALL);
+            delay(15);
+            return;
+        }
+        if (tx >= BTN_PREV_X && tx < BTN_PREV_X + BTN_W) {
+            uint16_t freq = persistFindPresetFreq(radioGetBandIdx(),
+                                                  radioGetFrequency(), -1);
+            if (freq) {
+                radioSetFrequency(freq);
+                persistSaveFrequency(radioGetBandIdx(), freq);
+                // Re-anchor the encoder so the next rotation tunes from
+                // the new freq instead of snapping back to the old one.
+                encoderSetBoundsForMode(currentMode, freq, radioGetVolume());
+                markDirty(DIRTY_ALL);
+            }
+            delay(15);
+            return;
+        }
+        if (tx >= BTN_MUTE_X && tx < BTN_MUTE_X + BTN_W) {
+            radioSetMute(!radioGetMute());
+            markDirty(DIRTY_ALL);
+            delay(15);
+            return;
+        }
+        if (tx >= BTN_NEXT_X && tx < BTN_NEXT_X + BTN_W) {
+            uint16_t freq = persistFindPresetFreq(radioGetBandIdx(),
+                                                  radioGetFrequency(), +1);
+            if (freq) {
+                radioSetFrequency(freq);
+                persistSaveFrequency(radioGetBandIdx(), freq);
+                encoderSetBoundsForMode(currentMode, freq, radioGetVolume());
+                markDirty(DIRTY_ALL);
+            }
+            delay(15);
+            return;
+        }
+        if (tx >= BTN_SEEK_UP_X && tx < BTN_SEEK_UP_X + BTN_W) {
+            seekStart(SEEK_UP);
+            markDirty(DIRTY_ALL);
+            delay(15);
+            return;
+        }
+    }
 
     if (tx >= TOUCH_FREQ_X && tx < TOUCH_FREQ_X + TOUCH_FREQ_W &&
         ty >= TOUCH_FREQ_Y && ty < TOUCH_FREQ_Y + TOUCH_FREQ_H) {

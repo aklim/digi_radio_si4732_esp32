@@ -17,6 +17,8 @@
 
 #include <stdint.h>
 
+#include "seek_step.h"   // SeekDir enum — used by drawButtonRow signature
+
 class TFT_eSPI;
 
 // Register the TFT handle that every draw function will push pixels to.
@@ -107,6 +109,29 @@ void drawRdsIndicator(int x, int y);
 // will change volume (not frequency). Set false in FREQUENCY mode.
 void drawSideBar(int x, int y, int sx, bool volFocus);
 void drawScanGraphs(uint32_t freq);
+
+// --- Bottom touch-button row (transport-style, 5 buttons) ------------------
+// Media-player-transport layout:
+//   ⏪  Seek Down  |  ◀  Prev Preset  |  🔊 Mute  |  Next Preset ▶  | Seek Up ⏩
+// Hit-test rects are defined here (single source of truth) so main.cpp and
+// Draw.cpp don't drift. Row lives at y=180..230; the strip y=170..239 is
+// cleared to TH.bg each call so a scan-graph exit or theme switch repaints
+// cleanly. Width/gap chosen so 5 × 58 + 6 × 5 = 320 fills the panel exactly.
+#define BTN_ROW_Y         180
+#define BTN_ROW_H          50
+#define BTN_W              58
+#define BTN_SEEK_DOWN_X     5
+#define BTN_PREV_X         68
+#define BTN_MUTE_X        131
+#define BTN_NEXT_X        194
+#define BTN_SEEK_UP_X     257
+
+// Paint the five-button row in one call. `seeking` + `seekDir` control the
+// outer double-arrow buttons' highlighted states (active direction inverts
+// fill while the seek runs); `muted` controls the centre speaker icon's
+// latched state. The inner single-arrow preset-nav buttons have no
+// persistent state — taps fire and forget, so no flag is threaded through.
+void drawButtonRow(bool seeking, SeekDir seekDir, bool muted);
 
 // --- Layout orchestrators ---------------------------------------------------
 // Full-screen repaint (draws directly to the provided TFT, no sprite). Call
