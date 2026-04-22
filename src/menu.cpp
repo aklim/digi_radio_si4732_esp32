@@ -47,6 +47,7 @@
 #include "Scan.h"
 #include "connectivity.h"
 #include "backlight.h"
+#include "version.h"
 
 namespace {
 
@@ -61,6 +62,7 @@ enum MenuState : uint8_t {
     MENU_STATE_BRIGHTNESS,
     MENU_STATE_MEMORY,         // list of 16 preset slots + Back
     MENU_STATE_MEMORY_SLOT,    // Load / Save / Delete / Back for g_memorySlot
+    MENU_STATE_ABOUT,          // read-only firmware identity takeover
 };
 
 MenuState g_state       = MENU_STATE_CLOSED;
@@ -80,9 +82,20 @@ constexpr TopItem TOP_ITEMS[] = {
     { "Scan",     CMD_SCAN      },
     { "Memory",   CMD_MEMORY    },
     { "Settings", CMD_SETTINGS  },
+    { "About",    CMD_ABOUT     },
     { "Close",    CMD_CLOSE     },
 };
 constexpr int TOP_COUNT = sizeof(TOP_ITEMS) / sizeof(TOP_ITEMS[0]);
+
+// Look up the top-menu row index for a given command so About's return
+// path can put the cursor back on its own row without hard-coding an
+// integer that drifts if TOP_ITEMS is reordered.
+int topIdxOf(MenuCmd cmd) {
+    for (int i = 0; i < TOP_COUNT; i++) {
+        if (TOP_ITEMS[i].cmd == cmd) return i;
+    }
+    return 0;
+}
 
 // --- Band-picker items -----------------------------------------------------
 // Count derived from the radio band table at render time so adding bands in
@@ -185,6 +198,7 @@ int currentItemCount() {
         case MENU_STATE_BRIGHTNESS:  return brightnessItemCount();
         case MENU_STATE_MEMORY:      return memoryItemCount();
         case MENU_STATE_MEMORY_SLOT: return memorySlotItemCount();
+        case MENU_STATE_ABOUT:       return 1;
         default:                     return 0;
     }
 }
@@ -436,6 +450,54 @@ void drawMemorySlotMenu(TFT_eSPI& tft) {
              labelMemorySlot, memorySlotItemIsBack, "Click = run action");
 }
 
+// Read-only firmware identity takeover. No list, no rotation handling —
+// just a fixed block of text showing the product name, version string
+// from version.h (the same FW_VERSION baked into FW_IDENTITY), the
+// seven-char commit hash (+dirty on uncommitted builds), and the build
+// date. A click returns to the top menu; the common long-press handler
+// in main.cpp still closes the whole menu as usual.
+void drawAboutScreen(TFT_eSPI& tft) {
+    drawTitle(tft, "About");
+
+    // Three info rows + product headline, vertically distributed between
+    // MENU_LIST_Y and MENU_HINT_Y. Spacing chosen to read evenly on the
+    // 320x240 panel without crowding the hint.
+    constexpr int ROW_STEP = 30;
+    int y = MENU_LIST_Y + 12;
+
+    tft.setTextDatum(MC_DATUM);
+
+    tft.setTextColor(COL_FREQ_TXT, COL_BG);
+    tft.setFreeFont(&FreeSansBold18pt7b);
+    tft.drawString("Digital Radio", SCREEN_W / 2, y);
+    y += ROW_STEP + 10;
+
+    tft.setTextColor(COL_LABEL_TXT, COL_BG);
+    tft.setFreeFont(&FreeSansBold12pt7b);
+    tft.drawString(FW_VERSION, SCREEN_W / 2, y);
+    y += ROW_STEP;
+
+    // Commit row — append "+dirty" when the build was cut from a working
+    // tree with uncommitted changes so a locally-patched binary is
+    // identifiable at a glance without a serial console.
+    char commitBuf[40];
+    if (FW_GIT_DIRTY) {
+        snprintf(commitBuf, sizeof(commitBuf), "commit %s+dirty", FW_GIT_COMMIT);
+    } else {
+        snprintf(commitBuf, sizeof(commitBuf), "commit %s", FW_GIT_COMMIT);
+    }
+    tft.drawString(commitBuf, SCREEN_W / 2, y);
+    y += ROW_STEP;
+
+    char builtBuf[40];
+    snprintf(builtBuf, sizeof(builtBuf), "built %s", FW_BUILD_DATE);
+    tft.drawString(builtBuf, SCREEN_W / 2, y);
+
+    tft.setTextDatum(TL_DATUM);
+
+    drawHint(tft, "Click = back");
+}
+
 }  // namespace
 
 // ============================================================================
@@ -502,6 +564,9 @@ void menuHandleClick() {
                 return;
             case CMD_SETTINGS:
                 transitionTo(MENU_STATE_SETTINGS);
+                return;
+            case CMD_ABOUT:
+                transitionTo(MENU_STATE_ABOUT);
                 return;
             case CMD_CLOSE:
                 menuClose();
@@ -694,6 +759,16 @@ void menuHandleClick() {
         }
         return;
     }
+
+    if (g_state == MENU_STATE_ABOUT) {
+        // Any click returns to the top menu with the cursor still on the
+        // About row — same "preserve context" return pattern used by the
+        // Brightness and MEMORY_SLOT sub-states.
+        g_state  = MENU_STATE_TOP;
+        g_cursor = topIdxOf(CMD_ABOUT);
+        g_dirty  = true;
+        return;
+    }
 }
 
 bool menuTakeDirty() {
@@ -718,6 +793,7 @@ void menuDraw(TFT_eSPI& tft) {
         case MENU_STATE_BRIGHTNESS:  drawBrightnessMenu(tft);  break;
         case MENU_STATE_MEMORY:      drawMemoryMenu(tft);      break;
         case MENU_STATE_MEMORY_SLOT: drawMemorySlotMenu(tft);  break;
+        case MENU_STATE_ABOUT:       drawAboutScreen(tft);     break;
         default: break;
     }
 }
