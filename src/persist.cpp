@@ -568,3 +568,44 @@ bool persistPresetIsValid(uint8_t slot) {
     if (slot >= PRESET_SLOT_COUNT) return false;
     return (g_presets[slot] & PRESET_VALID_BIT) != 0u;
 }
+
+uint16_t persistFindPresetFreq(uint8_t band, uint16_t currentFreq, int dir) {
+    // Single pass over all 16 slots. Track the best "strictly past current"
+    // freq in the requested direction, plus a wrap fallback (the opposite
+    // extreme across all matching presets). Decouples from slot order —
+    // the user model is "next higher station", not "next saved slot".
+    uint16_t bestForward  = 0;
+    bool     foundForward = false;
+    uint16_t wrapFallback = 0;
+    bool     foundAny     = false;
+    bool up = dir > 0;
+
+    for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
+        PresetSlot p = persistLoadPreset(i);
+        if (!p.valid || p.band != band) continue;
+        foundAny = true;
+
+        if (up) {
+            if (p.freq > currentFreq) {
+                if (!foundForward || p.freq < bestForward) {
+                    bestForward  = p.freq;
+                    foundForward = true;
+                }
+            }
+            // For wrap, we want the lowest overall.
+            if (wrapFallback == 0 || p.freq < wrapFallback) wrapFallback = p.freq;
+        } else {
+            if (p.freq < currentFreq) {
+                if (!foundForward || p.freq > bestForward) {
+                    bestForward  = p.freq;
+                    foundForward = true;
+                }
+            }
+            // For wrap, we want the highest overall.
+            if (p.freq > wrapFallback) wrapFallback = p.freq;
+        }
+    }
+
+    if (!foundAny) return 0;
+    return foundForward ? bestForward : wrapFallback;
+}

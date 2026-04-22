@@ -22,6 +22,7 @@
 #include "Themes.h"
 #include "radio.h"
 #include "Scan.h"
+#include "Seek.h"
 #include "input.h"
 
 // Short band-mode label for the mode box. Corresponds to ATS-Mini's
@@ -167,5 +168,15 @@ void drawLayoutDefault() {
         radioGetRdsRt(rt, sizeof(rt));
         if (rt[0]) drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
         else       drawScale(radioGetFrequency());
+    }
+
+    // Touch-button row at the bottom (y>=170). Hidden during a scan
+    // sweep — the scan graph extends further down at y=120..170 and a
+    // button row under it would confuse the "scan owns the chip" mode.
+    // The row's own fillRect also wipes any stale pixels from the
+    // previous repaint (e.g. when returning from a scan), so there's no
+    // clean-up needed on the opposite path.
+    if (!scanIsActive()) {
+        drawButtonRow(seekIsActive(), seekDirection(), radioGetMute());
     }
 }

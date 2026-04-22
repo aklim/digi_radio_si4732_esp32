@@ -95,6 +95,13 @@ uint16_t radioGetFrequency();
 void    radioSetVolume(uint8_t v);
 uint8_t radioGetVolume();
 
+// User-controlled audio mute. Latched — survives band switches (re-applied
+// in applyBandLocked) and bandscope scans (scanExit restores this value,
+// not unconditional false). Not persisted: mute-on-reboot is user-hostile.
+// Thread-safe; takes the radio mutex internally.
+void radioSetMute(bool mute);
+bool radioGetMute();
+
 // Render the current frequency as a short display string, e.g. "102.4 MHz"
 // or "1530 kHz". Writes at most `bufsize - 1` characters. Chosen over a
 // caller-side branch on bandMode so the UI never has to know units.

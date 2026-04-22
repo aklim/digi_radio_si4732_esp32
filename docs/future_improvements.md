@@ -27,17 +27,14 @@ references plus gaps surfaced while building v1.
 - AM / SW / LW bands — `radio.cpp` API extension + UI band label.
 - SSB (LSB / USB) with BFO tuning — requires the library's SSB patch-load
   sequence, bigger lift.
-- Auto-seek (up / down on encoder long-press or touch gesture).
-- Mute toggle (encoder double-click).
 - Squelch by RSSI threshold.
 - RDS clock / date display (CT group) + PTY decode.
 
 ## Input
 
 - Long-press encoder → menu system (ATS-Mini pattern).
-- Double-click encoder → secondary action per current mode (e.g. mute, seek).
-- Touch gestures: swipe left / right on freq zone = seek, tap+hold vol zone
-  = mute.
+- Double-click encoder → secondary action per current mode.
+- Touch gestures: swipe left / right on freq zone = fine tune.
 - Capacitive-touch upgrade path (XPT2046 is resistive — documented for
   posterity).
 

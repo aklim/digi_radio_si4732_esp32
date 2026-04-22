@@ -58,6 +58,9 @@ ColorTheme theme[] = {
         0x94B2, // scan_grid
         0x0659, // scan_snr
         0x07E0, // scan_rssi
+        0x3186, // btn_bg     (matches smeter_bar_empty — dim grey on black)
+        0xFFFF, // btn_fg     (white, same as freq_text)
+        0xF800, // btn_active (red, matches the rf_icon accent)
     },
 
     {
@@ -106,6 +109,9 @@ ColorTheme theme[] = {
         0x94B2, // scan_grid
         0x07FF, // scan_snr
         0x07E0, // scan_rssi
+        0x3AF3, // btn_bg     (matches smeter_bar_empty — slightly lighter than bg)
+        0xFFFF, // btn_fg
+        0xF800, // btn_active (red accent)
     },
 
     {
@@ -154,6 +160,9 @@ ColorTheme theme[] = {
         0x94B2, // scan_grid
         0x94B2, // scan_snr
         0x18C3, // scan_rssi
+        0xB594, // btn_bg     (matches smeter_bar_empty — darker than the paper bg)
+        0x3A08, // btn_fg     (dark text for paper-like contrast)
+        0x3A08, // btn_active (dark, inverted look for pressed mute)
     },
 
     {
@@ -202,6 +211,9 @@ ColorTheme theme[] = {
         0x18C3, // scan_grid
         0x2A25, // scan_snr
         0x00C2, // scan_rssi
+        0x3287, // btn_bg     (matches smeter_bar_empty)
+        0x00C2, // btn_fg     (same as text)
+        0x1165, // btn_active (text_muted as accent)
     },
 
     {
@@ -250,6 +262,9 @@ ColorTheme theme[] = {
         0x6B4D, // scan_grid
         0x5ACB, // scan_snr
         0x2945, // scan_rssi
+        0xE320, // btn_bg     (matches smeter_bar_empty — warm tan)
+        0x18C3, // btn_fg     (dark text for warm paper bg)
+        0x4208, // btn_active (dark accent, inverted fill)
     },
 
     {
@@ -298,6 +313,9 @@ ColorTheme theme[] = {
         0x8925, // scan_grid
         0x8925, // scan_snr
         0xF800, // scan_rssi
+        0x2104, // btn_bg     (matches smeter_bar_empty — dim row on black)
+        0xD986, // btn_fg     (night-amber text)
+        0x8925, // btn_active (dim amber accent)
     },
 
     {
@@ -346,6 +364,9 @@ ColorTheme theme[] = {
         0x2364, // scan_grid
         0x2364, // scan_snr
         0x052D, // scan_rssi
+        0x00E0, // btn_bg     (matches smeter_bar_empty — slightly lighter phosphor)
+        0x07AD, // btn_fg     (bright phosphor)
+        0x5CF2, // btn_active (highlighted phosphor — same as freq_hl)
     },
 
     {
@@ -394,6 +415,9 @@ ColorTheme theme[] = {
         0x6B4D, // scan_grid
         0x001F, // scan_snr
         0x07E0, // scan_rssi
+        0x3186, // btn_bg     (matches smeter_bar_empty — dim grey on space-black)
+        0x3FE0, // btn_fg     (same green as text)
+        0xF800, // btn_active (red accent, inverted fill)
     },
 
     {
@@ -442,6 +466,9 @@ ColorTheme theme[] = {
         0xD3F2, // scan_grid
         0xD3F2, // scan_snr
         0xFD95, // scan_rssi
+        0x8829, // btn_bg     (matches smeter_bar_empty — darker magenta)
+        0xFFFF, // btn_fg     (white — same as freq_text)
+        0xFD95, // btn_active (pale magenta accent, inverted fill)
     },
 };
 

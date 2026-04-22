@@ -124,4 +124,13 @@ void       persistSavePreset(uint8_t slot, PresetSlot p);
 void       persistClearPreset(uint8_t slot);
 bool       persistPresetIsValid(uint8_t slot);
 
+// Find the next / previous saved preset freq in `band`, relative to
+// `currentFreq`. Returns 0 when no presets exist for that band (caller
+// should no-op). Navigation is by frequency — "next" means the smallest
+// saved freq strictly greater than `currentFreq`, "prev" the largest
+// strictly less — and wraps at the ends (past the highest preset → lowest
+// preset). dir > 0 = next, dir < 0 = prev. Drives the on-screen preset
+// nav buttons without coupling the draw layer to the persist internals.
+uint16_t   persistFindPresetFreq(uint8_t band, uint16_t currentFreq, int dir);
+
 #endif  // PERSIST_H

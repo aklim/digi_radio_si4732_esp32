@@ -81,6 +81,15 @@ typedef struct __attribute__((packed)) {
     uint16_t scan_grid;
     uint16_t scan_snr;
     uint16_t scan_rssi;
+
+    // Bottom touch-button row (Seek Down / Mute / Seek Up). Not part of the
+    // ATS-Mini struct — added for the on-screen control surface that the
+    // encoder-only reference device doesn't need. btn_bg should sit close
+    // to bg so the row doesn't steal attention from the frequency / scale,
+    // btn_active inverts fill + text for the latched Mute indicator.
+    uint16_t btn_bg;
+    uint16_t btn_fg;
+    uint16_t btn_active;
 } ColorTheme;
 
 // Active-theme index (0..getTotalThemes()-1). Read/written from menu and

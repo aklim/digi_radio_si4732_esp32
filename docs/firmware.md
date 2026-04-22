@@ -243,13 +243,16 @@ a regression in any tested unit blocks merge.
 | `test_native_format`         | `radioFormatFrequencyPure()`   | [include/radio_format.h](../include/radio_format.h) |
 | `test_native_rds`            | `rdsSanitizeRt()`              | [src/rds_sanitize.cpp](../src/rds_sanitize.cpp) |
 | `test_native_bands`          | `g_bands[]` invariants         | [src/band_table.cpp](../src/band_table.cpp) |
+| `test_native_preset`         | `presetPack()` / `presetUnpack()` NVS codec | [include/preset_pack.h](../include/preset_pack.h) |
+| `test_native_seek`           | `seekNextFreq()` auto-seek wrap arithmetic  | [include/seek_step.h](../include/seek_step.h) |
 
 The test env enables `test_build_src = yes` and narrows
 `build_src_filter` to exactly `band_table.cpp` + `rds_sanitize.cpp`, so
 the native linker never sees `radio.cpp` / `main.cpp` / `persist.cpp`
 (which depend on Arduino / SI4735 / TFT_eSPI / FreeRTOS). The
-`radio_format.h` helper is header-only, so no extra cpp is needed for
-the format suite.
+`radio_format.h`, `preset_pack.h`, and `seek_step.h` helpers are
+header-only, so no extra cpp is needed for those suites — they pull
+in via the test source include alone.
 
 ### Adding a new suite
 
