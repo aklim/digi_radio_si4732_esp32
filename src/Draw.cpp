@@ -390,8 +390,17 @@ static void drawInfo(int x, int y, int sx, bool volFocus) {
         s.drawString("--", 48 + x, row + 1 * 16, 2);
     }
 
+    // Time: RDS Clock-Time from the CT mirror. Empty buffer => no decoded
+    // CT (non-FM, no-sync, stale, or RDS disabled) — fall back to the
+    // "--:--" placeholder so the row still reads legibly.
+    char ctBuf[8];
+    radioGetRdsCt(ctBuf, sizeof(ctBuf));
     s.drawString("Time:", 6 + x, row + 2 * 16, 2);
-    s.drawString("--:--", 48 + x, row + 2 * 16, 2);
+    if (ctBuf[0] && band->mode == MODE_FM) {
+        s.drawString(ctBuf, 48 + x, row + 2 * 16, 2);
+    } else {
+        s.drawString("--:--", 48 + x, row + 2 * 16, 2);
+    }
 
     s.setTextDatum(TL_DATUM);
 }

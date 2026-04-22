@@ -134,6 +134,17 @@ void radioGetRdsRt(char* buf, size_t bufsize);
 // when not decoded yet, on no-sync, or on non-FM bands.
 uint16_t radioGetRdsPi();
 
+// Copy the current RDS Clock-Time (CT / 4A group) as "HH:MM" local time
+// (PU2CLR applies the station's Local Time Offset) into the caller's
+// buffer. `bufsize` must be at least 6 (5 chars + NUL). Writes an empty
+// string on non-FM bands, on no-sync, before the first CT frame decodes,
+// or when the user has disabled RDS in Settings. Mutex-guarded.
+void radioGetRdsCt(char* buf, size_t bufsize);
+
+// True once a valid CT group has decoded since RDS sync was established.
+// Cleared by the stale-timeout and by radioSetRdsEnabled(false).
+bool radioGetRdsCtValid();
+
 // User-controlled RDS decode gate. When disabled, the Core-0 task's RDS
 // poll early-returns (no I²C traffic), the Si4735's RDS block is turned
 // off via setRdsConfig(0,...), and the PS/RT/PI mirrors are cleared so

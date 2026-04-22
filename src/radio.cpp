@@ -34,6 +34,7 @@
 
 #include "radio.h"
 #include "radio_format.h"
+#include "rds_ct.h"
 #include "rds_sanitize.h"
 
 #include <Arduino.h>
@@ -79,6 +80,17 @@ static unsigned long g_lastRdsSync = 0;
 static char     g_ps[9]  = {0};
 static char     g_rt[65] = {0};
 static uint16_t g_rdsPi  = 0;  // 16-bit PI code; 0 == "not decoded"
+
+// RDS Clock-Time mirror (4A group). PU2CLR already applies the station's
+// Local Time Offset, so these are local HH:MM at the transmitter. We do
+// NOT mirror year/month/day: observed Ukrainian FM traffic regularly lands
+// year in 1906/1907 because of a PU2CLR MJD underflow after LTO correction
+// (even though the HH:MM values are correct). When a date row is added
+// later it will need its own validator + mirrors. g_ctHmValid == false
+// means "no CT decoded yet" and the UI falls back to "--:--".
+static uint16_t g_ctHour    = 0;
+static uint16_t g_ctMinute  = 0;
+static bool     g_ctHmValid = false;
 
 // User-controlled RDS decode gate. Default true so existing firmware
 // behaviour (RDS always on in FM) carries over. Menu "Settings -> RDS"
@@ -317,16 +329,38 @@ static bool pollRdsLocked() {
                 g_rdsPi = pi;
                 changed = true;
             }
+
+            // CT (4A group, Clock-Time). The bool overload returns false
+            // unless the library's current group type is 4, so this branch
+            // only fires when a fresh CT frame is decoded. LTO is already
+            // applied inside the library, so the components are local time
+            // at the transmitter. We only trust HH:MM (rdsCtHmIsValid) —
+            // y/mo/d from PU2CLR are regularly corrupt on Ukrainian
+            // broadcasts due to an MJD underflow after LTO correction.
+            uint16_t ctY, ctMo, ctD, ctH, ctMi;
+            if (g_radio.getRdsDateTime(&ctY, &ctMo, &ctD, &ctH, &ctMi)
+                && rdsCtHmIsValid(ctH, ctMi)) {
+                if (!g_ctHmValid || ctH != g_ctHour || ctMi != g_ctMinute) {
+                    g_ctHour    = ctH;
+                    g_ctMinute  = ctMi;
+                    g_ctHmValid = true;
+                    changed     = true;
+                }
+            }
         }
     } else if (g_lastRdsSync && (now - g_lastRdsSync > RDS_STALE_MS)) {
         // Lost sync long enough that any displayed text is almost certainly
         // from a different station. Clear so the UI shows "no RDS" instead of
-        // a stale PS name.
-        if (g_ps[0] || g_rt[0] || g_rdsPi) {
-            g_ps[0] = 0;
-            g_rt[0] = 0;
-            g_rdsPi = 0;
-            changed = true;
+        // a stale PS name — CT rides the same 10 s stale clock as PS/RT/PI
+        // so a different station's clock doesn't linger on screen.
+        if (g_ps[0] || g_rt[0] || g_rdsPi || g_ctHmValid) {
+            g_ps[0]     = 0;
+            g_rt[0]     = 0;
+            g_rdsPi     = 0;
+            g_ctHmValid = false;
+            g_ctHour    = 0;
+            g_ctMinute  = 0;
+            changed     = true;
         }
     }
 
@@ -586,6 +620,24 @@ uint16_t radioGetRdsPi() {
     return pi;
 }
 
+void radioGetRdsCt(char* buf, size_t bufsize) {
+    if (!buf || bufsize < 1) return;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    if (g_ctHmValid && bufsize >= 6) {
+        rdsCtFormatHM(g_ctHour, g_ctMinute, buf, bufsize);
+    } else {
+        buf[0] = 0;
+    }
+    xSemaphoreGive(g_mutex);
+}
+
+bool radioGetRdsCtValid() {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    bool v = g_ctHmValid;
+    xSemaphoreGive(g_mutex);
+    return v;
+}
+
 void radioSetRdsEnabled(bool enabled) {
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     if (enabled == g_rdsEnabled) {
@@ -603,12 +655,15 @@ void radioSetRdsEnabled(bool enabled) {
 
     if (!enabled) {
         // Clear the mirror on disable so the UI immediately falls back to
-        // drawScale (Layout-Default uses `rt[0]==0` as the switch). PI/PS
+        // drawScale (Layout-Default uses `rt[0]==0` as the switch). PI/PS/CT
         // zero too so a later re-enable doesn't briefly show stale text
         // before the next sync arrives.
         g_ps[0]       = 0;
         g_rt[0]       = 0;
         g_rdsPi       = 0;
+        g_ctHmValid   = false;
+        g_ctHour      = 0;
+        g_ctMinute    = 0;
         g_lastRdsSync = 0;
         g_rdsChanged  = true;
     } else {

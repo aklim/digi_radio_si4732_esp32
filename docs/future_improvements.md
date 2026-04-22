@@ -28,7 +28,23 @@ references plus gaps surfaced while building v1.
 - SSB (LSB / USB) with BFO tuning — requires the library's SSB patch-load
   sequence, bigger lift.
 - Squelch by RSSI threshold.
-- RDS clock / date display (CT group) + PTY decode.
+- RDS PTY (Programme Type) decode — the companion field to CT that
+  names the programme genre. CT itself landed in v2.8.0.
+- Authoritative time source as a fallback when RDS CT is wrong or
+  absent. Many commercial / regional broadcasters ship bogus CT (UTC
+  mislabelled as local, stale DST, or just unsynced station clocks),
+  so CT alone can't be trusted as a clock for the listener. Two paths:
+  WiFi + NTP (requires bringing up the STA connect flow that
+  `connectivity.cpp` currently scaffolds but does not wire) or a
+  small battery-backed RTC module on an unused GPIO. In either model
+  RDS CT becomes an optional overlay (per-station sanity check), not
+  the primary source.
+- Manual TZ override in Settings — a simpler, offline-only
+  compromise: user picks `Auto / UTC / UTC+1 / UTC+2 / UTC+3 / UTC+4`
+  and we shift the decoded CT by that amount. Does not help the
+  per-station-disagreement case (different stations still disagree
+  with each other), but lets listeners who have a "home" station
+  with otherwise-correct UTC timestamps get real local time.
 
 ## Input
 

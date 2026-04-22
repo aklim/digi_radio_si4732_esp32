@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-04-22
+
+### Added
+
+- **RDS Clock-Time in sidebar.** The `Time: --:--` placeholder reserved in
+  the info box since v2.1 now shows real station time from RDS group 4A.
+  The Core-0 task decodes each fresh CT frame via PU2CLR's
+  `getRdsDateTime(year, month, day, hour, minute)` overload — the library
+  applies the station's Local Time Offset internally, so the displayed
+  value is local time at the transmitter (not UTC). Falls back to
+  `--:--` on non-FM bands, when RDS sync is stale (≥ 10 s), when the
+  user has turned RDS off in **Settings**, or before the first CT group
+  decodes. No NVS schema bump — CT rides the existing `rds_en` gate
+  and `RDS_STALE_MS` stale clock alongside PS / RT / PI.
+
+  Observation from live Ukrainian FM traffic: PU2CLR's decoder lands
+  year in 1906/1907 on most transmitters due to an MJD underflow after
+  LTO correction, even though HH:MM is correct. We therefore gate the
+  CT display on `rdsCtHmIsValid(h, mi)` and ignore the date components
+  entirely; a date row is a future enhancement that would bring its
+  own validator + mirrors.
+
+  **Known limitation — RDS CT quirk.** The clock value is only as
+  accurate as the broadcaster makes it. Many commercial and regional
+  stations keep their CT aligned to UTC without the correct LTO, or
+  never update for DST, so different stations may show different times
+  that all disagree with the listener's wall clock. This is a
+  standards-compliant RDS behaviour, not a firmware bug — other
+  receivers (including ATS-Mini) show the same discrepancies on the
+  same transmitters. International public broadcasters (BBC, DLF,
+  Kan, RAI) and well-run national networks (Suspilne in Ukraine) are
+  usually correct. A future release may add a WiFi + NTP time source
+  with RDS CT as an optional overlay; see
+  [docs/future_improvements.md](docs/future_improvements.md).
+- **`rdsCtHmIsValid` / `rdsCtFormatHM` pure helpers.** New
+  [include/rds_ct.h](include/rds_ct.h) + [src/rds_ct.cpp](src/rds_ct.cpp)
+  module (no Arduino / SI4735 / FreeRTOS deps) that range-checks the
+  HH:MM components and hand-assembles zero-padded `HH:MM` without
+  pulling `snprintf`'s stdio float formatter. Shared between the
+  firmware and the native host tests so the same gate runs in both.
+- **`radioGetRdsCt` / `radioGetRdsCtValid` public API.** Copy-into-buffer
+  getter by direct analogy with `radioGetRdsPs` / `radioGetRdsRt`;
+  guarded by the same mutex. Added to [include/radio.h](include/radio.h)
+  next to `radioGetRdsPi`.
+- **`test_native_ct` Unity suite.** 14 host-side tests covering HH:MM
+  range validation, zero-padding, overflow-clamp, buffer-too-small
+  safety, and NULL-buffer safety. Runs under the existing
+  `pio test -e native` (~2 s) and the same CI gate in
+  [.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+### Changed
+
+- `radioSetRdsEnabled(false)` now also clears the CT mirror (hour /
+  minute / valid flag) along with PS / RT / PI so a later re-enable
+  can't briefly flash stale time before the next decode arrives.
+- `drawInfo()` in [src/Draw.cpp](src/Draw.cpp) replaces the hardcoded
+  `"--:--"` on the Time row with the CT mirror value when a valid CT
+  frame has decoded on an FM band; the placeholder string is retained
+  only as the fallback for the no-CT cases enumerated above.
+
 ## [2.7.0] - 2026-04-22
 
 ### Added
@@ -507,7 +567,8 @@ to the TFT firmware; upgrade to the TFT shield or stay on
     [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
     on every `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.7.0...v2.8.0
 [2.7.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.4.0...v2.5.0
