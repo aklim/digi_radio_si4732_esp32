@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-04-23
+
 ### Added
 
 - **About dialog.** Long-press → **About** opens a read-only takeover
@@ -584,7 +586,8 @@ to the TFT firmware; upgrade to the TFT shield or stay on
     [GitHub Releases](https://github.com/aklim/digi_radio_si4732_esp32/releases)
     on every `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.8.0...HEAD
+[Unreleased]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.7.0...v2.8.0
 [2.7.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/aklim/digi_radio_si4732_esp32/compare/v2.5.0...v2.6.0
