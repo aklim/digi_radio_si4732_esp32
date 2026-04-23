@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **About dialog.** Long-press → **About** opens a read-only takeover
+  that shows the product name, `FW_VERSION` (matches
+  `git describe --tags --dirty`), the seven-char git commit (with a
+  `+dirty` suffix on working-tree builds), and the build date. The
+  identity macros already lived in [include/version.h](include/version.h)
+  and were baked into `FW_IDENTITY` inside the ELF since v1.0, but at
+  runtime they only appeared on the boot splash — About gives the
+  running firmware a permanent, user-reachable home for its version
+  without wedging another label into the already-crowded header row.
+  Implemented as a new `MENU_STATE_ABOUT` in
+  [src/menu.cpp](src/menu.cpp) + a `CMD_ABOUT = 0x2700` entry in
+  [include/menu.h](include/menu.h); click returns to the top menu with
+  the cursor still on the About row, long-press closes the menu as
+  usual. No NVS schema change, no radio-side code.
+
 ## [2.8.0] - 2026-04-22
 
 ### Added

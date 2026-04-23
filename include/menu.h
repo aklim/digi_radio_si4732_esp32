@@ -41,6 +41,7 @@ enum MenuCmd : uint16_t {
     CMD_SCAN      = 0x1B00,   // start a bandscope sweep around current freq
     CMD_MEMORY    = 0x2800,   // enter the memory-preset submenu (save/load stations)
     CMD_SETTINGS  = 0x2E00,   // enter the feature-toggle submenu
+    CMD_ABOUT     = 0x2700,   // read-only firmware identity takeover (version + commit + date)
     CMD_CLOSE     = 0xFF00,   // dismiss the menu, return to main UI
 };
 
